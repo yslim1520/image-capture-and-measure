@@ -37,7 +37,8 @@ echo Installing or updating the app...
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt || goto :failed
 
 echo Starting OPT Log Diameter Checker...
-".venv\Scripts\python.exe" -m streamlit run app.py
+start "" "http://localhost:8501"
+".venv\Scripts\python.exe" -m streamlit run app.py --server.headless=true --server.address=127.0.0.1 --browser.gatherUsageStats=false
 goto :end
 
 :no_python
