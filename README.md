@@ -7,12 +7,16 @@ A Windows-friendly local app for detecting and measuring **outside-bark** log-en
 - Uploads JPG, JPEG, and PNG images.
 - Adjusts brightness, contrast, and sharpness; optionally previews edges.
 - Proposes log-end rings with OpenCV Hough circles and a contour/ellipse fallback.
+- Filters proposals by full-circumference edge support so straight and partial shapes are less likely to be accepted.
 - Refines proposed radii toward visible outside-bark boundaries.
 - Adds, deletes, moves, and resizes rings on an interactive canvas.
+- Shows each ring ID only while hovering in the correction ID map.
 - Supports full-image and left/centre/right focused editing, horizontal/vertical panning, and canvas zoom.
 - Calibrates from one or two reference logs in inches.
 - Reports diameter to one decimal place and an estimated tolerance.
 - Assigns unique IDs (`L01`, `L02`, ...).
+- Reassigns IDs on demand, row by row from upper-left to lower-right, without silently renumbering during edits.
+- Shows a labelled annotated preview in calibration/review before reference selection.
 - Colours rings: Red `<14.0 in`, Yellow `14.0–16.0 in` inclusive, Blue `>16.0 in`.
 - Exports annotated PNG/JPG, Excel-friendly CSV, and a reopenable JSON project file.
 
@@ -43,9 +47,10 @@ This creates a private repository, adds it as `origin`, and pushes `main`.
 2. Adjust visibility, then choose **Auto-detect logs**.
 3. In **Correct rings**, inspect every log. The ring must follow the **outside bark**, not the pale wood or an internal mark.
 4. Delete false rings, add missing rings, and move/resize imperfect rings. Use focused regions for close work.
-5. In **Calibrate & review**, select one or two reference logs and enter actual outside-bark diameters.
-6. Review the annotated preview and tolerance. A second reference helps expose scale/perspective disagreement.
-7. Export the annotated image, CSV, and JSON project.
+5. Apply the corrections, then choose **Reassign IDs row by row** and inspect the labelled preview.
+6. In **Calibrate & review**, use the annotated ID preview to select one or two reference logs and enter actual outside-bark diameters.
+7. Review the measured preview and tolerance. A second reference helps expose scale/perspective disagreement.
+8. Export the annotated image, CSV, and JSON project.
 
 The included OPT photograph seeds the two user-identified references near the blue marks as **19.0 in** and **13.0 in**. Confirm both rings visually before using the calibration.
 

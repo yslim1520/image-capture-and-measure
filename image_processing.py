@@ -38,13 +38,24 @@ def edge_preview(rgb: np.ndarray, low: int = 55, high: int = 145) -> np.ndarray:
     return cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
 
 
-def _radial_refine(gray: np.ndarray, x: float, y: float, radius: float) -> tuple[float, float]:
+def _gradient_magnitude(gray: np.ndarray) -> np.ndarray:
+    grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    return cv2.magnitude(grad_x, grad_y)
+
+
+def _radial_refine(
+    gray: np.ndarray,
+    x: float,
+    y: float,
+    radius: float,
+    magnitude: np.ndarray | None = None,
+) -> tuple[float, float]:
     """Refine a proposed ring toward the strongest nearby outside-bark edge."""
     if radius < 5:
         return radius, 0.2
-    grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    magnitude = cv2.magnitude(grad_x, grad_y)
+    if magnitude is None:
+        magnitude = _gradient_magnitude(gray)
     radii = np.linspace(radius * 0.78, radius * 1.28, 35)
     angles = np.linspace(0, 2 * np.pi, 96, endpoint=False)
     candidates: list[float] = []
@@ -69,6 +80,39 @@ def _radial_refine(gray: np.ndarray, x: float, y: float, radius: float) -> tuple
     consistency = max(0.0, 1.0 - mad / max(refined * 0.22, 1.0))
     strength_score = min(1.0, float(np.median(strengths)) / 160.0)
     return refined, 0.45 * consistency + 0.55 * strength_score
+
+
+def _boundary_roundness(
+    magnitude: np.ndarray,
+    x: float,
+    y: float,
+    radius: float,
+    edge_threshold: float = 70.0,
+) -> float:
+    """Score how continuously a circular boundary is supported around a ring.
+
+    Straight edges and partial arcs can fool HoughCircles. Sampling narrow radial
+    bands around the full circumference rejects those shapes unless edge support
+    is both broad and distributed across most angular sectors.
+    """
+    if radius < 5:
+        return 0.0
+    angles = np.linspace(0, 2 * np.pi, 144, endpoint=False)
+    radius_factors = np.linspace(0.92, 1.08, 7)
+    radii = radius * radius_factors[:, None]
+    xs = np.rint(x + np.cos(angles)[None, :] * radii).astype(int)
+    ys = np.rint(y + np.sin(angles)[None, :] * radii).astype(int)
+    height, width = magnitude.shape
+    valid = (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height)
+    samples = np.zeros_like(xs, dtype=np.float32)
+    samples[valid] = magnitude[ys[valid], xs[valid]]
+    strongest = samples.max(axis=0)
+    supported = strongest >= edge_threshold
+
+    coverage = float(supported.mean())
+    sector_support = supported.reshape(12, -1).mean(axis=1)
+    balanced_sectors = float((sector_support >= 0.35).mean())
+    return float(np.clip(0.65 * coverage + 0.35 * balanced_sectors, 0.0, 1.0))
 
 
 def _deduplicate(circles: Iterable[dict], min_radius: float) -> list[dict]:
@@ -144,6 +188,7 @@ def detect_log_ends(
     max_radius: int,
     hough_threshold: int = 30,
     search_y_percent: tuple[int, int] = (0, 100),
+    minimum_roundness: float = 0.70,
 ) -> list[dict]:
     """Detect log ends with Hough circles plus a contour/ellipse fallback.
 
@@ -201,7 +246,7 @@ def detect_log_ends(
         circularity = 4.0 * np.pi * area / (perimeter * perimeter)
         if not (min_radius <= radius <= max_radius):
             continue
-        if axis_ratio < 0.62 or circularity < 0.33:
+        if axis_ratio < 0.76 or circularity < 0.50:
             continue
         if x - radius < 0 or x + radius >= width or y - radius < 0 or y + radius >= roi.shape[0]:
             continue
@@ -225,12 +270,24 @@ def detect_log_ends(
 
     deduped = _deduplicate(appearance_filtered, min_radius)
     full_gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    round_candidates: list[dict] = []
+    magnitude = _gradient_magnitude(full_gray)
     for circle in deduped:
         radius, boundary_confidence = _radial_refine(
-            full_gray, circle["x"], circle["y"], circle["radius"]
+            full_gray, circle["x"], circle["y"], circle["radius"], magnitude
         )
         circle["radius"] = float(np.clip(radius, min_radius, max_radius))
-        circle["confidence"] = round(
-            0.55 * float(circle["confidence"]) + 0.45 * boundary_confidence, 3
+        roundness = _boundary_roundness(
+            magnitude, circle["x"], circle["y"], circle["radius"]
         )
-    return _deduplicate(deduped, min_radius)
+        circle["roundness"] = round(roundness, 3)
+        if roundness < float(minimum_roundness):
+            continue
+        circle["confidence"] = round(
+            0.40 * float(circle["confidence"])
+            + 0.30 * boundary_confidence
+            + 0.30 * roundness,
+            3,
+        )
+        round_candidates.append(circle)
+    return _deduplicate(round_candidates, min_radius)

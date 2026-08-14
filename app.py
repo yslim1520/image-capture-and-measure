@@ -13,11 +13,18 @@ import streamlit as st
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
-from export_utils import annotated_image, load_project, measurements_csv, project_json
+from export_utils import (
+    annotated_image,
+    hover_id_overlay,
+    load_project,
+    measurements_csv,
+    project_json,
+)
 from image_processing import detect_log_ends, edge_preview, enhance_image, pil_to_rgb
 from measurement import (
     assign_log_ids,
     calibration_from_references,
+    ensure_log_ids,
     measured_logs,
     nearest_circle,
     ring_rgb,
@@ -61,6 +68,7 @@ def _reset_for_image(image_sha: str) -> None:
         st.session_state.references = {}
         st.session_state.canvas_revision = 0
         st.session_state.sample_refs_seeded = False
+        st.session_state.show_reassigned_preview = False
 
 
 def _fabric_objects(circles: list[dict], crop: tuple[int, int, int, int], scale: float) -> list[dict]:
@@ -84,6 +92,7 @@ def _fabric_objects(circles: list[dict], crop: tuple[int, int, int, int], scale:
                 "stroke": stroke,
                 "strokeWidth": 3,
                 "log_id": circle.get("id", ""),
+                "uid": circle.get("uid", ""),
                 "source": circle.get("source", "Manual"),
                 "confidence": circle.get("confidence", 1.0),
             }
@@ -103,6 +112,12 @@ def _canvas_to_circles(
         for c in all_circles
         if not (x0 <= float(c["x"]) <= x1 and y0 <= float(c["y"]) <= y1)
     ]
+    inside = [
+        dict(c)
+        for c in all_circles
+        if x0 <= float(c["x"]) <= x1 and y0 <= float(c["y"]) <= y1
+    ]
+    used_uids: set[str] = set()
     edited: list[dict] = []
     for obj in (json_data or {}).get("objects", []):
         if obj.get("type") != "circle":
@@ -113,16 +128,62 @@ def _canvas_to_circles(
             continue
         center_x = (float(obj.get("left", 0)) + radius_x) / scale + x0
         center_y = (float(obj.get("top", 0)) + radius_y) / scale + y0
+        log_id = str(obj.get("log_id", ""))
+        uid = str(obj.get("uid", ""))
+        matched = next(
+            (
+                circle
+                for circle in inside
+                if (uid and str(circle.get("uid")) == uid)
+                or (log_id and str(circle.get("id")) == log_id)
+            ),
+            None,
+        )
+        if matched is None and not (uid or log_id):
+            available = [c for c in inside if str(c.get("uid")) not in used_uids]
+            if available:
+                nearest = min(
+                    available,
+                    key=lambda c: (float(c["x"]) - center_x) ** 2
+                    + (float(c["y"]) - center_y) ** 2,
+                )
+                distance = (
+                    (float(nearest["x"]) - center_x) ** 2
+                    + (float(nearest["y"]) - center_y) ** 2
+                ) ** 0.5
+                edited_radius = (radius_x + radius_y) / (2.0 * scale)
+                if distance <= max(12.0, 0.85 * max(float(nearest["radius"]), edited_radius)):
+                    matched = nearest
+        if matched is not None:
+            used_uids.add(str(matched.get("uid")))
         edited.append(
             {
+                **(matched or {}),
                 "x": center_x,
                 "y": center_y,
                 "radius": (radius_x + radius_y) / (2.0 * scale),
+                "id": log_id or (matched or {}).get("id", ""),
+                "uid": uid or (matched or {}).get("uid", ""),
                 "source": "Manual edit" if not obj.get("source") else obj.get("source"),
                 "confidence": float(obj.get("confidence", 1.0)),
             }
         )
-    return assign_log_ids(outside + edited)
+    return ensure_log_ids(outside + edited)
+
+
+def _remap_references_after_reassignment(
+    before: list[dict], after: list[dict], references: dict[str, float]
+) -> dict[str, float]:
+    reference_by_uid = {
+        str(circle.get("uid")): float(references[circle["id"]])
+        for circle in before
+        if circle.get("id") in references and circle.get("uid")
+    }
+    return {
+        circle["id"]: reference_by_uid[str(circle.get("uid"))]
+        for circle in after
+        if str(circle.get("uid")) in reference_by_uid
+    }
 
 
 def _seed_sample_references(circles: list[dict]) -> None:
@@ -173,6 +234,14 @@ max_radius = st.sidebar.slider(
 hough_threshold = st.sidebar.slider(
     "Detection strictness", 18, 60, 38, help="Lower finds more rings; higher reduces false rings."
 )
+minimum_roundness = st.sidebar.slider(
+    "Minimum roundness",
+    0.40,
+    0.90,
+    0.70,
+    0.05,
+    help="Higher keeps only rings with more complete circular boundary support.",
+)
 search_y = st.sidebar.slider(
     "Vertical search area (%)", 0, 100, (18, 70) if is_sample else (0, 100)
 )
@@ -182,16 +251,25 @@ if top_actions[0].button("🔎 Auto-detect logs", type="primary", width="stretch
     with st.spinner("Fitting rings to visible outside-bark boundaries…"):
         try:
             st.session_state.circles = assign_log_ids(
-                detect_log_ends(enhanced, min_radius, max_radius, hough_threshold, search_y)
+                detect_log_ends(
+                    enhanced,
+                    min_radius,
+                    max_radius,
+                    hough_threshold,
+                    search_y,
+                    minimum_roundness,
+                )
             )
             st.session_state.references = {}
             st.session_state.sample_refs_seeded = False
+            st.session_state.show_reassigned_preview = False
             st.session_state.canvas_revision += 1
         except Exception as exc:
             st.error(f"Detection could not finish: {exc}")
 if top_actions[1].button("Clear all rings", width="stretch"):
     st.session_state.circles = []
     st.session_state.references = {}
+    st.session_state.show_reassigned_preview = False
     st.session_state.canvas_revision += 1
 
 project_upload = st.sidebar.file_uploader("Reopen JSON project", type=["json"], key="project_upload")
@@ -201,7 +279,7 @@ if project_upload and st.sidebar.button("Load project measurements"):
         if payload.get("image", {}).get("sha256") != image_sha:
             st.warning("The project was saved for a different image. Rings were not loaded.")
         else:
-            st.session_state.circles = assign_log_ids(payload["circles"])
+            st.session_state.circles = ensure_log_ids(payload["circles"])
             st.session_state.references = {
                 str(k): float(v) for k, v in payload.get("reference_diameters_in", {}).items()
             }
@@ -210,7 +288,7 @@ if project_upload and st.sidebar.button("Load project measurements"):
     except Exception as exc:
         st.error(str(exc))
 
-circles = assign_log_ids(st.session_state.circles)
+circles = ensure_log_ids(st.session_state.circles)
 st.session_state.circles = circles
 if is_sample:
     _seed_sample_references(circles)
@@ -229,6 +307,25 @@ with tabs[0]:
 
 with tabs[1]:
     st.markdown('<div class="step-card"><b>How to edit:</b> choose a focused region, then drag a ring to move/resize it. Select a ring and use the canvas trash icon to delete it. Switch to Add circle to draw a missing ring.</div>', unsafe_allow_html=True)
+    sort_actions = st.columns([1, 2])
+    if sort_actions[0].button("Reassign IDs row by row", type="secondary", width="stretch"):
+        reassigned = assign_log_ids(circles)
+        st.session_state.references = _remap_references_after_reassignment(
+            circles, reassigned, st.session_state.references
+        )
+        st.session_state.circles = reassigned
+        st.session_state.show_reassigned_preview = True
+        st.session_state.canvas_revision += 1
+        st.rerun()
+    sort_actions[1].caption(
+        "Apply canvas/table corrections first. Then this numbers from the upper-left row to the lower-right row."
+    )
+    if st.session_state.get("show_reassigned_preview") and circles:
+        st.image(
+            annotated_image(enhanced, measured_logs(circles, None), "PNG"),
+            caption="Preview after row-by-row ID reassignment",
+            width="stretch",
+        )
     preset = st.radio("Focus region", ["Full image", "Left third", "Centre third", "Right third"], horizontal=True)
     preset_ranges = {
         "Full image": (0, width),
@@ -251,6 +348,24 @@ with tabs[1]:
         canvas_w = max(100, int((x1 - x0) * scale))
         canvas_h = max(100, int((y1 - y0) * scale))
         crop_image = Image.fromarray(enhanced[y0:y1, x0:x1]).resize((canvas_w, canvas_h))
+        hover_circles = []
+        for circle in circles:
+            if x0 <= float(circle["x"]) <= x1 and y0 <= float(circle["y"]) <= y1:
+                hover_circles.append(
+                    {
+                        **circle,
+                        "x": (float(circle["x"]) - x0) * scale,
+                        "y": (float(circle["y"]) - y0) * scale,
+                        "radius": float(circle["radius"]) * scale,
+                    }
+                )
+        if hover_circles:
+            st.caption("Hover directly over a ring below to show its ID. Labels remain hidden otherwise.")
+            st.html(
+                hover_id_overlay(np.asarray(crop_image), hover_circles),
+                unsafe_allow_javascript=True,
+            )
+            st.caption("Correction canvas")
         initial = {
             "version": "4.4.0",
             "objects": _fabric_objects(circles, (x0, y0, x1, y1), scale),
@@ -269,9 +384,17 @@ with tabs[1]:
             key=f"canvas_{image_sha[:8]}_{preset}_{st.session_state.canvas_revision}_{edit_mode}",
         )
         if st.button("✓ Apply canvas corrections", type="primary"):
-            st.session_state.circles = _canvas_to_circles(
+            updated_circles = _canvas_to_circles(
                 canvas_result.json_data, (x0, y0, x1, y1), scale, circles
             )
+            valid_ids = {circle["id"] for circle in updated_circles}
+            st.session_state.circles = updated_circles
+            st.session_state.references = {
+                log_id: actual
+                for log_id, actual in st.session_state.references.items()
+                if log_id in valid_ids
+            }
+            st.session_state.show_reassigned_preview = False
             st.session_state.canvas_revision += 1
             st.rerun()
 
@@ -305,12 +428,26 @@ with tabs[1]:
                         "source": "Manual table edit",
                     }
                 )
-            st.session_state.circles = assign_log_ids(updated)
+            valid_ids = {circle["id"] for circle in updated}
+            st.session_state.circles = ensure_log_ids(updated)
+            st.session_state.references = {
+                log_id: actual
+                for log_id, actual in st.session_state.references.items()
+                if log_id in valid_ids
+            }
+            st.session_state.show_reassigned_preview = False
             st.session_state.canvas_revision += 1
             st.rerun()
 
 with tabs[2]:
     st.markdown('<div class="step-card"><b>Calibration:</b> select one or two clearly visible reference logs, then enter their actual outside-bark diameter in inches.</div>', unsafe_allow_html=True)
+    if circles:
+        st.subheader("Annotated ID preview")
+        st.image(
+            annotated_image(enhanced, measured_logs(circles, None), "PNG"),
+            caption="Use these printed IDs when selecting the reference log rows below.",
+            width="stretch",
+        )
     reference_rows = []
     for c in circles:
         actual = st.session_state.references.get(c["id"])

@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import cv2
+import numpy as np
 from PIL import Image
 
-from image_processing import detect_log_ends, pil_to_rgb
+from image_processing import _boundary_roundness, _gradient_magnitude, detect_log_ends, pil_to_rgb
 from measurement import assign_log_ids, nearest_circle
 
 
@@ -15,3 +17,15 @@ def test_sample_detects_reference_regions():
     ref2 = nearest_circle(circles, 911, 483)
     assert ref1 is not None and ((ref1["x"] - 947) ** 2 + (ref1["y"] - 395) ** 2) ** 0.5 < 65
     assert ref2 is not None and ((ref2["x"] - 911) ** 2 + (ref2["y"] - 483) ** 2) ** 0.5 < 65
+    assert all(((c["x"] - 1734) ** 2 + (c["y"] - 315) ** 2) ** 0.5 >= 60 for c in circles)
+
+
+def test_round_boundary_score_rejects_a_rectangle():
+    gray = np.zeros((240, 420), dtype=np.uint8)
+    cv2.circle(gray, (100, 120), 55, 200, -1)
+    cv2.rectangle(gray, (240, 75), (390, 165), 200, -1)
+    magnitude = _gradient_magnitude(gray)
+    circle_score = _boundary_roundness(magnitude, 100, 120, 55)
+    rectangle_score = _boundary_roundness(magnitude, 315, 120, 55)
+    assert circle_score >= 0.9
+    assert rectangle_score < 0.4

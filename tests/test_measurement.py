@@ -1,4 +1,10 @@
-from measurement import assign_log_ids, calibration_from_references, diameter_group, measured_logs
+from measurement import (
+    assign_log_ids,
+    calibration_from_references,
+    diameter_group,
+    ensure_log_ids,
+    measured_logs,
+)
 
 
 def test_colour_boundaries_are_exact():
@@ -31,5 +37,22 @@ def test_ids_are_unique_and_row_ordered():
         ]
     )
     assert [c["id"] for c in circles] == ["L01", "L02", "L03"]
+    assert [(c["x"], c["y"]) for c in circles] == [(10, 10), (20, 100), (90, 100)]
     assert len({c["id"] for c in circles}) == 3
 
+
+def test_manual_edits_keep_ids_until_explicit_reassignment():
+    circles = assign_log_ids(
+        [
+            {"x": 10, "y": 10, "radius": 10},
+            {"x": 100, "y": 10, "radius": 10},
+        ]
+    )
+    moved = [dict(circles[0], x=150), dict(circles[1], x=5)]
+    stable = ensure_log_ids(moved)
+    assert [circle["id"] for circle in stable] == ["L01", "L02"]
+    reassigned = assign_log_ids(stable)
+    assert [(circle["id"], circle["x"]) for circle in reassigned] == [
+        ("L01", 5),
+        ("L02", 150),
+    ]
