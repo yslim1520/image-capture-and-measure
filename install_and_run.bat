@@ -3,18 +3,33 @@ setlocal
 cd /d "%~dp0"
 title OPT Log Diameter Checker - Setup
 
+set "PYTHON_EXE="
+
 where py >nul 2>nul
 if %errorlevel%==0 (
-    set "PYTHON_CMD=py -3"
-) else (
-    where python >nul 2>nul
-    if not %errorlevel%==0 goto :no_python
-    set "PYTHON_CMD=python"
+    for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do set "PYTHON_EXE=%%P"
 )
+
+if not defined PYTHON_EXE (
+    where python >nul 2>nul
+    if %errorlevel%==0 (
+        for /f "delims=" %%P in ('python -c "import sys; print(sys.executable)" 2^>nul') do set "PYTHON_EXE=%%P"
+    )
+)
+
+if not defined PYTHON_EXE if exist "%LOCALAPPDATA%\Programs\Python\Python314\python.exe" set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+if not defined PYTHON_EXE if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+if not defined PYTHON_EXE if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined PYTHON_EXE if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+
+if not defined PYTHON_EXE goto :no_python
+
+echo Using:
+"%PYTHON_EXE%" --version
 
 if not exist ".venv\Scripts\python.exe" (
     echo Creating the private app environment...
-    %PYTHON_CMD% -m venv .venv || goto :failed
+    "%PYTHON_EXE%" -m venv .venv || goto :failed
 )
 
 echo Installing or updating the app...
@@ -38,4 +53,3 @@ pause
 
 :end
 endlocal
-
