@@ -2,17 +2,23 @@
 
 A Windows-friendly local app for detecting and measuring **outside-bark** log-end diameters from JPG/PNG photographs. Auto-detection is followed by a required visual correction workflow; the app is not a substitute for a calibrated field measurement.
 
+The same codebase now provides a responsive Android-friendly web workflow. It prioritizes selecting an existing photo from Gallery or Files and can be hosted on Streamlit Community Cloud.
+
 ## What the MVP does
 
 - Uploads JPG, JPEG, and PNG images.
+- Provides photo preparation guidance and automatic resolution, lighting, sharpness, and orientation checks.
+- Creates a bounded working copy of very large phone photos for more predictable cloud processing.
 - Adjusts brightness, contrast, and sharpness; optionally previews edges.
 - Proposes log-end rings with OpenCV Hough circles and a contour/ellipse fallback.
 - Filters proposals by full-circumference edge support so straight and partial shapes are less likely to be accepted.
 - Refines proposed radii toward visible outside-bark boundaries.
 - Adds, deletes, moves, and resizes rings on an interactive canvas.
 - Shows each ring ID only while hovering in the correction ID map.
+- On touchscreens, shows the ID when a ring is tapped.
 - Supports full-image and left/centre/right focused editing, horizontal/vertical panning, and canvas zoom.
 - Calibrates from one or two reference logs in inches.
+- Provides phone-friendly reference ID dropdowns and outside-bark diameter fields.
 - Reports diameter to one decimal place and an estimated tolerance.
 - Assigns unique IDs (`L01`, `L02`, ...).
 - Reassigns IDs on demand, row by row from upper-left to lower-right, without silently renumbering during edits.
@@ -28,6 +34,10 @@ A Windows-friendly local app for detecting and measuring **outside-bark** log-en
 4. A browser window opens at `http://localhost:8501`.
 
 The app runs locally. Uploaded photos are not sent anywhere by the application.
+
+## Android and cloud use
+
+Deploy the repository as a Streamlit web app, open the resulting link in Android Chrome, and add it to the home screen. See [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md) for the deployment, Android, photo-quality, and privacy instructions.
 
 ## Publish the prepared local repository to GitHub
 
@@ -68,6 +78,7 @@ py -3 -m venv .venv
 - `app.py` — Streamlit workflow and interactive correction canvas.
 - `image_processing.py` — enhancement, Hough detection, ellipse fallback, boundary refinement.
 - `measurement.py` — IDs, calibration, categories, and tolerance.
+- `photo_quality.py` — resolution, brightness, sharpness, and orientation guidance.
 - `export_utils.py` — annotated image, CSV, and JSON exports.
 - `sample_data/` — supplied OPT calibration photograph.
 - `tests/` — calculation, export, and sample-image checks.

@@ -38,6 +38,7 @@ def test_hover_overlay_hides_labels_until_pointer_enters_ring():
     assert 'data-log-id="L01"' in html
     assert "tip.style.display='block'" in html
     assert "tip.style.display='none'" in html
+    assert "addEventListener('click'" in html
 
 
 def test_project_round_trip_payload():

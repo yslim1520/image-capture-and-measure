@@ -29,26 +29,30 @@ def hover_id_overlay(rgb: np.ndarray, circles: list[dict]) -> str:
     for circle in circles:
         log_id = html.escape(str(circle.get("id", "Unnumbered")), quote=True)
         colour = "#%02x%02x%02x" % ring_rgb(circle.get("group", "Uncalibrated"))
+        radius = max(2.0, float(circle["radius"]))
+        diameter = radius * 2.0
         rings.append(
-            f'<circle class="log-ring" cx="{float(circle["x"]):.2f}" '
-            f'cy="{float(circle["y"]):.2f}" r="{max(2.0, float(circle["radius"])):.2f}" '
-            f'stroke="{colour}" stroke-width="{ring_width}" fill="#000" fill-opacity="0.001" '
-            f'data-log-id="{log_id}" aria-label="{log_id}"><title>{log_id}</title></circle>'
+            f'<div class="log-ring" style="left:{float(circle["x"]) - radius:.2f}px;'
+            f'top:{float(circle["y"]) - radius:.2f}px;width:{diameter:.2f}px;height:{diameter:.2f}px;'
+            f'border:{ring_width}px solid {colour}" data-log-id="{log_id}" '
+            f'aria-label="{log_id}" title="{log_id}"></div>'
         )
     return f"""<div class="opt-hover-map">
 <style>
 .opt-hover-map{{position:relative;max-width:100%;max-height:780px;overflow:auto;background:#111}}
-.opt-hover-map svg{{display:block;max-width:none}}
-.opt-hover-map .log-ring{{cursor:help;pointer-events:all}}
+.opt-hover-stage{{position:relative;width:{width}px;height:{height}px}}
+.opt-hover-stage img{{position:absolute;inset:0;width:{width}px;height:{height}px;max-width:none}}
+.opt-hover-map .log-ring{{position:absolute;box-sizing:border-box;border-radius:50%;cursor:help;
+pointer-events:all;background:rgba(0,0,0,0.001)}}
 .opt-hover-map .log-tip{{display:none;position:absolute;z-index:10;padding:5px 9px;border-radius:6px;
 background:#111;color:#fff;font:600 14px system-ui,sans-serif;box-shadow:0 2px 8px #0008;
 pointer-events:none}}
 </style>
-<div class="log-tip"></div>
-<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
-<image href="data:image/png;base64,{image_data}" width="{width}" height="{height}"/>
+<div class="opt-hover-stage" role="img">
+<img src="data:image/png;base64,{image_data}" width="{width}" height="{height}" alt="Log ID map">
 {''.join(rings)}
-</svg>
+<div class="log-tip"></div>
+</div>
 <script>
 const root=document.currentScript.parentElement;
 const tip=root.querySelector('.log-tip');
@@ -65,7 +69,15 @@ root.querySelectorAll('.log-ring').forEach((ring)=>{{
     tip.style.top=(event.clientY-box.top+root.scrollTop+12)+'px';
   }});
   ring.addEventListener('mouseleave',()=>{{tip.style.display='none';}});
+  ring.addEventListener('click',(event)=>{{
+    event.stopPropagation();
+    const box=root.getBoundingClientRect();
+    tip.textContent=ring.dataset.logId; tip.style.display='block';
+    tip.style.left=(event.clientX-box.left+root.scrollLeft+12)+'px';
+    tip.style.top=(event.clientY-box.top+root.scrollTop+12)+'px';
+  }});
 }});
+root.addEventListener('click',()=>{{tip.style.display='none';}});
 </script></div>"""
 
 

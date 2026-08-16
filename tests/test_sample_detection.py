@@ -4,7 +4,13 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from image_processing import _boundary_roundness, _gradient_magnitude, detect_log_ends, pil_to_rgb
+from image_processing import (
+    _boundary_roundness,
+    _gradient_magnitude,
+    detect_log_ends,
+    pil_to_rgb,
+    resize_for_analysis,
+)
 from measurement import assign_log_ids, nearest_circle
 
 
@@ -29,3 +35,10 @@ def test_round_boundary_score_rejects_a_rectangle():
     rectangle_score = _boundary_roundness(magnitude, 315, 120, 55)
     assert circle_score >= 0.9
     assert rectangle_score < 0.4
+
+
+def test_large_phone_photo_is_downscaled_for_analysis():
+    image = np.zeros((3000, 4000, 3), dtype=np.uint8)
+    resized, scale = resize_for_analysis(image, max_dimension=2400)
+    assert resized.shape == (1800, 2400, 3)
+    assert scale == 0.6

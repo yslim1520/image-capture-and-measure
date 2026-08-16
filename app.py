@@ -20,7 +20,13 @@ from export_utils import (
     measurements_csv,
     project_json,
 )
-from image_processing import detect_log_ends, edge_preview, enhance_image, pil_to_rgb
+from image_processing import (
+    detect_log_ends,
+    edge_preview,
+    enhance_image,
+    pil_to_rgb,
+    resize_for_analysis,
+)
 from measurement import (
     assign_log_ids,
     calibration_from_references,
@@ -29,6 +35,7 @@ from measurement import (
     nearest_circle,
     ring_rgb,
 )
+from photo_quality import assess_photo_quality
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -36,7 +43,12 @@ SAMPLE_IMAGE = APP_DIR / "sample_data" / "opt_logs_reference.png"
 SAMPLE_REFERENCE_HINTS = [(947.0, 395.0, 19.0), (911.0, 483.0, 13.0)]
 
 
-st.set_page_config(page_title="OPT Log Diameter Checker", page_icon="🪵", layout="wide")
+st.set_page_config(
+    page_title="OPT Log Diameter Checker",
+    page_icon="🪵",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 st.markdown(
     """
     <style>
@@ -44,6 +56,16 @@ st.markdown(
       .step-card {background:#f7f9fb;border:1px solid #d9e1e8;border-radius:12px;padding:12px 16px;margin-bottom:12px;}
       .small-note {color:#536270;font-size:0.9rem;}
       div[data-testid="stMetric"] {background:#f7f9fb;border:1px solid #e3e8ee;border-radius:10px;padding:8px 12px;}
+      div[data-testid="stFileUploader"] section {min-height:96px;border:2px dashed #1B6B50;border-radius:14px;}
+      .mobile-guide {background:#eef7f2;border-left:5px solid #1B6B50;border-radius:10px;padding:12px 14px;margin:8px 0 14px;}
+      @media (max-width: 700px) {
+        .block-container {padding:0.7rem 0.75rem 2rem;}
+        h1 {font-size:1.65rem !important;line-height:1.2 !important;}
+        h2 {font-size:1.3rem !important;}
+        .stButton > button, .stDownloadButton > button {min-height:48px;font-size:1rem;}
+        div[data-testid="stTabs"] button {min-height:48px;padding-left:10px;padding-right:10px;}
+        .step-card {font-size:0.95rem;padding:10px 12px;}
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -51,9 +73,27 @@ st.markdown(
 
 
 def _read_source() -> tuple[bytes, str, bool] | None:
-    st.sidebar.header("1 · Choose image")
-    uploaded = st.sidebar.file_uploader("Upload a JPG or PNG", type=["jpg", "jpeg", "png"])
-    use_sample = st.sidebar.checkbox("Use included OPT test photo", value=uploaded is None)
+    st.subheader("Choose an existing log photo")
+    st.markdown(
+        """
+        <div class="mobile-guide">
+        <b>Before selecting the photo</b><br>
+        • Use the original, high-resolution landscape photo—not a screenshot or messaging-app copy.<br>
+        • Keep the phone steady, the lens clean, and the log ends bright without strong glare or deep shadow.<br>
+        • Stand as square as practical to the log ends and include the complete stack.<br>
+        • Before taking the photo, choose one or two clear reference logs, measure their <b>outside-bark</b>
+          diameter, and mark them so you can identify them later.<br>
+        • Reference logs positioned apart from each other help reveal scale changes across the image.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    uploaded = st.file_uploader(
+        "Select photo from phone or computer",
+        type=["jpg", "jpeg", "png"],
+        help="On Android, tap Browse files and choose the original photo from Gallery or Files.",
+    )
+    use_sample = st.checkbox("Try the included OPT example photo", value=False)
     if uploaded is not None:
         return uploaded.getvalue(), uploaded.name, False
     if use_sample and SAMPLE_IMAGE.exists():
@@ -67,8 +107,31 @@ def _reset_for_image(image_sha: str) -> None:
         st.session_state.circles = []
         st.session_state.references = {}
         st.session_state.canvas_revision = 0
+        st.session_state.reference_widget_revision = 0
         st.session_state.sample_refs_seeded = False
         st.session_state.show_reassigned_preview = False
+
+
+def _clear_reference_widgets(image_sha: str) -> None:
+    st.session_state.reference_widget_revision = (
+        int(st.session_state.get("reference_widget_revision", 0)) + 1
+    )
+
+
+def _reference_widget_suffix(image_sha: str) -> str:
+    return f"{image_sha[:10]}_{int(st.session_state.get('reference_widget_revision', 0))}"
+
+
+def _sync_reference_widgets(image_sha: str, references: dict[str, float]) -> None:
+    _clear_reference_widgets(image_sha)
+    items = list(references.items())[:2]
+    suffix = _reference_widget_suffix(image_sha)
+    if items:
+        st.session_state[f"reference_1_id_{suffix}"] = items[0][0]
+        st.session_state[f"reference_1_diameter_{suffix}"] = float(items[0][1])
+    if len(items) > 1:
+        st.session_state[f"reference_2_id_{suffix}"] = items[1][0]
+        st.session_state[f"reference_2_diameter_{suffix}"] = float(items[1][1])
 
 
 def _fabric_objects(circles: list[dict], crop: tuple[int, int, int, int], scale: float) -> list[dict]:
@@ -196,14 +259,15 @@ def _seed_sample_references(circles: list[dict]) -> None:
             references[nearest["id"]] = actual
     st.session_state.references = references
     st.session_state.sample_refs_seeded = True
+    _sync_reference_widgets(st.session_state.image_sha, references)
 
 
 st.title("🪵 OPT Log Diameter Checker")
-st.caption("Measure outside-bark log-end diameters, correct every ring, calibrate, and export.")
+st.caption("Android-friendly photo measurement: select, detect, correct, calibrate, and export.")
 
 source = _read_source()
 if source is None:
-    st.info("Upload a JPG/PNG in the left panel, or enable the included OPT test photo.")
+    st.info("Select a JPG or PNG above to begin. The app processes it in the current session and does not intentionally save it to persistent storage.")
     st.stop()
 
 image_bytes, image_name, is_sample = source
@@ -214,40 +278,61 @@ try:
 except Exception as exc:
     st.error(f"The image could not be opened: {exc}")
     st.stop()
-original_rgb = pil_to_rgb(original_pil)
+source_rgb = pil_to_rgb(original_pil)
+original_rgb, analysis_scale = resize_for_analysis(source_rgb)
 height, width = original_rgb.shape[:2]
 
-st.sidebar.header("2 · Improve visibility")
-brightness = st.sidebar.slider("Brightness", -50, 50, 0, 1)
-contrast = st.sidebar.slider("Contrast", 0.5, 2.0, 1.05, 0.05)
-sharpness = st.sidebar.slider("Sharpness", 0.5, 3.0, 1.2, 0.1)
-show_edges = st.sidebar.checkbox("Show edge preview", value=False)
-enhanced = enhance_image(original_rgb, brightness, contrast, sharpness)
+quality = assess_photo_quality(source_rgb)
+with st.expander("Photo quality check", expanded=not quality["ready"]):
+    if quality["ready"]:
+        st.success("This photo passes the app's basic resolution, lighting, sharpness, and orientation checks.")
+    else:
+        st.warning("This photo may still work, but retaking it could improve ring fitting.")
+    st.caption(
+        f"Resolution: {quality['width']} × {quality['height']} px ({quality['megapixels']:.1f} MP) · "
+        f"Brightness signal: {quality['mean_brightness']:.1f} · "
+        f"Sharpness signal: {quality['sharpness_score']:.1f}"
+    )
+    for guidance in quality["guidance"]:
+        st.write(f"• {guidance}")
+    if analysis_scale < 1.0:
+        st.write(
+            f"• The app created a {width} × {height} px working copy for faster cloud processing; "
+            "the original upload was not overwritten."
+        )
+    st.caption("These checks are best-guess photo guidance, not a guarantee of measurement accuracy.")
+del source_rgb
 
-st.sidebar.header("3 · Detection")
 default_min = max(8, int(width * 0.014))
 default_max = max(default_min + 5, int(width * 0.040))
-min_radius = st.sidebar.slider("Smallest radius (px)", 5, max(10, width // 8), default_min)
-max_radius = st.sidebar.slider(
-    "Largest radius (px)", min_radius + 1, max(min_radius + 2, width // 5), default_max
-)
-hough_threshold = st.sidebar.slider(
-    "Detection strictness", 18, 60, 38, help="Lower finds more rings; higher reduces false rings."
-)
-minimum_roundness = st.sidebar.slider(
-    "Minimum roundness",
-    0.40,
-    0.90,
-    0.70,
-    0.05,
-    help="Higher keeps only rings with more complete circular boundary support.",
-)
-search_y = st.sidebar.slider(
-    "Vertical search area (%)", 0, 100, (18, 70) if is_sample else (0, 100)
-)
+with st.expander("Optional image and detection settings"):
+    st.caption("The defaults are a precision-first starting point. Change these only when rings are missed or false rings remain.")
+    brightness = st.slider("Brightness", -50, 50, 0, 1)
+    contrast = st.slider("Contrast", 0.5, 2.0, 1.05, 0.05)
+    sharpness = st.slider("Sharpness", 0.5, 3.0, 1.2, 0.1)
+    show_edges = st.checkbox("Show edge preview", value=False)
+    min_radius = st.slider("Smallest radius (px)", 5, max(10, width // 8), default_min)
+    max_radius = st.slider(
+        "Largest radius (px)", min_radius + 1, max(min_radius + 2, width // 5), default_max
+    )
+    hough_threshold = st.slider(
+        "Detection strictness", 18, 60, 38, help="Lower finds more rings; higher reduces false rings."
+    )
+    minimum_roundness = st.slider(
+        "Minimum roundness",
+        0.40,
+        0.90,
+        0.70,
+        0.05,
+        help="Higher keeps only rings with more complete circular boundary support.",
+    )
+    search_y = st.slider(
+        "Vertical search area (%)", 0, 100, (18, 70) if is_sample else (0, 100)
+    )
 
-top_actions = st.columns([1, 1, 3])
-if top_actions[0].button("🔎 Auto-detect logs", type="primary", width="stretch"):
+enhanced = enhance_image(original_rgb, brightness, contrast, sharpness)
+
+if st.button("Auto-detect log ends", type="primary", width="stretch"):
     with st.spinner("Fitting rings to visible outside-bark boundaries…"):
         try:
             st.session_state.circles = assign_log_ids(
@@ -261,32 +346,35 @@ if top_actions[0].button("🔎 Auto-detect logs", type="primary", width="stretch
                 )
             )
             st.session_state.references = {}
+            _clear_reference_widgets(image_sha)
             st.session_state.sample_refs_seeded = False
             st.session_state.show_reassigned_preview = False
             st.session_state.canvas_revision += 1
         except Exception as exc:
             st.error(f"Detection could not finish: {exc}")
-if top_actions[1].button("Clear all rings", width="stretch"):
+if st.button("Clear all rings", width="stretch"):
     st.session_state.circles = []
     st.session_state.references = {}
     st.session_state.show_reassigned_preview = False
     st.session_state.canvas_revision += 1
 
-project_upload = st.sidebar.file_uploader("Reopen JSON project", type=["json"], key="project_upload")
-if project_upload and st.sidebar.button("Load project measurements"):
-    try:
-        payload = load_project(project_upload.getvalue())
-        if payload.get("image", {}).get("sha256") != image_sha:
-            st.warning("The project was saved for a different image. Rings were not loaded.")
-        else:
-            st.session_state.circles = ensure_log_ids(payload["circles"])
-            st.session_state.references = {
-                str(k): float(v) for k, v in payload.get("reference_diameters_in", {}).items()
-            }
-            st.session_state.canvas_revision += 1
-            st.success("Project measurements restored.")
-    except Exception as exc:
-        st.error(str(exc))
+with st.expander("Open a previously saved project"):
+    project_upload = st.file_uploader("Select project JSON", type=["json"], key="project_upload")
+    if project_upload and st.button("Load project measurements", width="stretch"):
+        try:
+            payload = load_project(project_upload.getvalue())
+            if payload.get("image", {}).get("sha256") != image_sha:
+                st.warning("The project was saved for a different image. Rings were not loaded.")
+            else:
+                st.session_state.circles = ensure_log_ids(payload["circles"])
+                st.session_state.references = {
+                    str(k): float(v) for k, v in payload.get("reference_diameters_in", {}).items()
+                }
+                _sync_reference_widgets(image_sha, st.session_state.references)
+                st.session_state.canvas_revision += 1
+                st.success("Project measurements restored.")
+        except Exception as exc:
+            st.error(str(exc))
 
 circles = ensure_log_ids(st.session_state.circles)
 st.session_state.circles = circles
@@ -297,27 +385,26 @@ tabs = st.tabs(["1 · Detect", "2 · Correct rings", "3 · Calibrate & review", 
 
 with tabs[0]:
     st.markdown('<div class="step-card"><b>Goal:</b> each outside-bark boundary should have exactly one ring. Auto-detection is only the starting point.</div>', unsafe_allow_html=True)
-    left, right = st.columns([3, 2])
-    left.image(enhanced, caption=f"{image_name} · {width} × {height} px", width="stretch")
+    st.image(enhanced, caption=f"{image_name} · {width} × {height} px", width="stretch")
     if show_edges:
-        right.image(edge_preview(enhanced), caption="Edge preview", width="stretch")
+        st.image(edge_preview(enhanced), caption="Edge preview", width="stretch")
     else:
-        right.metric("Detected rings", len(circles))
-        right.write("Continue to **Correct rings** to add, delete, move, or resize every result.")
+        st.metric("Detected rings", len(circles))
+        st.write("Continue to **Correct rings** to add, delete, move, or resize every result.")
 
 with tabs[1]:
-    st.markdown('<div class="step-card"><b>How to edit:</b> choose a focused region, then drag a ring to move/resize it. Select a ring and use the canvas trash icon to delete it. Switch to Add circle to draw a missing ring.</div>', unsafe_allow_html=True)
-    sort_actions = st.columns([1, 2])
-    if sort_actions[0].button("Reassign IDs row by row", type="secondary", width="stretch"):
+    st.markdown('<div class="step-card"><b>How to edit:</b> choose a focused region. On a phone, tap a ring to select it, drag its centre to move it, and drag a corner handle to resize it. Use the trash icon to delete it, or switch to Add circle for a missing log.</div>', unsafe_allow_html=True)
+    if st.button("Reassign IDs row by row", type="secondary", width="stretch"):
         reassigned = assign_log_ids(circles)
         st.session_state.references = _remap_references_after_reassignment(
             circles, reassigned, st.session_state.references
         )
+        _sync_reference_widgets(image_sha, st.session_state.references)
         st.session_state.circles = reassigned
         st.session_state.show_reassigned_preview = True
         st.session_state.canvas_revision += 1
         st.rerun()
-    sort_actions[1].caption(
+    st.caption(
         "Apply canvas/table corrections first. Then this numbers from the upper-left row to the lower-right row."
     )
     if st.session_state.get("show_reassigned_preview") and circles:
@@ -326,7 +413,18 @@ with tabs[1]:
             caption="Preview after row-by-row ID reassignment",
             width="stretch",
         )
-    preset = st.radio("Focus region", ["Full image", "Left third", "Centre third", "Right third"], horizontal=True)
+    editor_profile = st.radio(
+        "Editing screen size",
+        ["Phone", "Tablet", "Desktop"],
+        horizontal=True,
+        help="Phone keeps the touch canvas narrow enough for an Android screen.",
+    )
+    preset = st.radio(
+        "Focus region",
+        ["Full image", "Left third", "Centre third", "Right third"],
+        index=1 if editor_profile == "Phone" else 0,
+        horizontal=True,
+    )
     preset_ranges = {
         "Full image": (0, width),
         "Left third": (0, width // 3 + width // 12),
@@ -343,10 +441,20 @@ with tabs[1]:
     if x1 - x0 < 20 or y1 - y0 < 20:
         st.warning("Widen the focus region to at least 20 pixels.")
     else:
-        base_scale = min(1350 / (x1 - x0), 760 / (y1 - y0))
+        target_width, target_height = {
+            "Phone": (360, 620),
+            "Tablet": (720, 720),
+            "Desktop": (1200, 760),
+        }[editor_profile]
+        base_scale = min(target_width / (x1 - x0), target_height / (y1 - y0))
         scale = max(0.15, base_scale * zoom)
         canvas_w = max(100, int((x1 - x0) * scale))
         canvas_h = max(100, int((y1 - y0) * scale))
+        st.markdown(
+            f'<style>iframe[title="streamlit_drawable_canvas.st_canvas"] '
+            f'{{height:{canvas_h + 12}px !important;min-height:{canvas_h + 12}px !important;}}</style>',
+            unsafe_allow_html=True,
+        )
         crop_image = Image.fromarray(enhanced[y0:y1, x0:x1]).resize((canvas_w, canvas_h))
         hover_circles = []
         for circle in circles:
@@ -360,7 +468,7 @@ with tabs[1]:
                     }
                 )
         if hover_circles:
-            st.caption("Hover directly over a ring below to show its ID. Labels remain hidden otherwise.")
+            st.caption("Tap a ring on a phone, or hover over it on a computer, to show its ID.")
             st.html(
                 hover_id_overlay(np.asarray(crop_image), hover_circles),
                 unsafe_allow_javascript=True,
@@ -445,43 +553,78 @@ with tabs[2]:
         st.subheader("Annotated ID preview")
         st.image(
             annotated_image(enhanced, measured_logs(circles, None), "PNG"),
-            caption="Use these printed IDs when selecting the reference log rows below.",
+            caption="Use these printed IDs in the reference dropdowns below.",
             width="stretch",
         )
-    reference_rows = []
-    for c in circles:
-        actual = st.session_state.references.get(c["id"])
-        reference_rows.append(
-            {
-                "Use as reference": actual is not None,
-                "ID": c["id"],
-                "Actual diameter (in)": actual if actual is not None else None,
-                "Ring diameter (px)": round(c["radius"] * 2, 1),
-            }
+    log_ids = [str(circle["id"]) for circle in circles]
+    saved_references = [
+        (log_id, float(actual))
+        for log_id, actual in st.session_state.references.items()
+        if log_id in log_ids
+    ]
+    if saved_references:
+        saved_summary = " · ".join(
+            f"{log_id} = {actual:.1f} in" for log_id, actual in saved_references
         )
-    ref_df = pd.DataFrame(reference_rows)
-    edited_refs = st.data_editor(
-        ref_df,
-        hide_index=True,
-        width="stretch",
-        disabled=["ID", "Ring diameter (px)"],
-        column_config={
-            "Use as reference": st.column_config.CheckboxColumn(),
-            "Actual diameter (in)": st.column_config.NumberColumn(min_value=0.1, step=0.1, format="%.1f"),
-        },
-    )
-    if st.button("Save reference selection", type="primary"):
-        chosen = {}
-        for row in edited_refs.to_dict("records"):
-            if row["Use as reference"] and pd.notna(row["Actual diameter (in)"]):
-                chosen[str(row["ID"])] = float(row["Actual diameter (in)"])
-        if len(chosen) > 2:
-            st.error("Choose no more than two reference logs.")
-        elif not chosen:
-            st.error("Choose at least one reference log.")
-        else:
-            st.session_state.references = chosen
-            st.success("Reference selection saved.")
+        st.success(f"Active reference calibration: {saved_summary}")
+        edit_references = st.checkbox(
+            "Change saved reference logs",
+            value=False,
+            key=f"edit_references_{image_sha[:10]}_{st.session_state.get('reference_widget_revision', 0)}",
+        )
+    else:
+        edit_references = True
+
+    if edit_references:
+        first_saved = saved_references[0] if saved_references else (None, 0.0)
+        second_saved = saved_references[1] if len(saved_references) > 1 else (None, 0.0)
+        first_options = ["Choose a log ID"] + log_ids
+        second_options = ["No second reference"] + log_ids
+        reference_suffix = _reference_widget_suffix(image_sha)
+        first_id_key = f"reference_1_id_{reference_suffix}"
+        first_diameter_key = f"reference_1_diameter_{reference_suffix}"
+        second_id_key = f"reference_2_id_{reference_suffix}"
+        second_diameter_key = f"reference_2_diameter_{reference_suffix}"
+        st.session_state.setdefault(first_id_key, first_saved[0] or first_options[0])
+        st.session_state.setdefault(first_diameter_key, float(first_saved[1]))
+        st.session_state.setdefault(second_id_key, second_saved[0] or second_options[0])
+        st.session_state.setdefault(second_diameter_key, float(second_saved[1]))
+
+        with st.container(border=True):
+            st.markdown("**Reference log 1**")
+            first_id = st.selectbox("Log ID", first_options, key=first_id_key)
+            first_actual = st.number_input(
+                "Actual outside-bark diameter (in)",
+                min_value=0.0,
+                step=0.1,
+                format="%.1f",
+                key=first_diameter_key,
+            )
+
+        with st.container(border=True):
+            st.markdown("**Reference log 2 - optional but recommended**")
+            second_id = st.selectbox("Second log ID", second_options, key=second_id_key)
+            second_actual = st.number_input(
+                "Second actual outside-bark diameter (in)",
+                min_value=0.0,
+                step=0.1,
+                format="%.1f",
+                key=second_diameter_key,
+            )
+
+        if st.button("Save reference logs", type="primary", width="stretch"):
+            chosen: dict[str, float] = {}
+            if first_id != first_options[0] and first_actual > 0:
+                chosen[first_id] = float(first_actual)
+            if second_id != second_options[0] and second_actual > 0:
+                chosen[second_id] = float(second_actual)
+            if not chosen:
+                st.error("Choose at least one log ID and enter its measured diameter.")
+            elif first_id == second_id and second_id != second_options[0]:
+                st.error("Choose two different logs, or remove the second reference.")
+            else:
+                st.session_state.references = chosen
+                st.success("Reference logs saved.")
 
     calibration = None
     if st.session_state.references:
@@ -491,10 +634,9 @@ with tabs[2]:
             st.warning(str(exc))
     logs = measured_logs(circles, calibration)
     if calibration:
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Scale", f"{calibration['pixels_per_inch']:.2f} px/in")
-        m2.metric("Estimated tolerance", f"±{calibration['estimated_tolerance_in']:.1f} in")
-        m3.metric("Measured logs", len(logs))
+        st.metric("Scale", f"{calibration['pixels_per_inch']:.2f} px/in")
+        st.metric("Estimated tolerance", f"±{calibration['estimated_tolerance_in']:.1f} in")
+        st.metric("Measured logs", len(logs))
         if calibration["perspective_warning"]:
             st.warning("⚠️ One reference cannot measure perspective variation. Add a second reference for a stronger tolerance estimate.")
         preview_bytes = annotated_image(enhanced, logs, "PNG")
@@ -543,22 +685,21 @@ with tabs[3]:
             {"brightness": brightness, "contrast": contrast, "sharpness": sharpness},
         )
         base_name = Path(image_name).stem + "_OPT_measured"
-        c1, c2, c3 = st.columns(3)
-        c1.download_button(
+        st.download_button(
             f"Download annotated {image_format}",
             annotated,
             f"{base_name}.{image_format.lower()}",
             "image/jpeg" if image_format == "JPG" else "image/png",
             width="stretch",
         )
-        c2.download_button(
+        st.download_button(
             "Download measurements CSV",
             csv_bytes,
             f"{base_name}.csv",
             "text/csv",
             width="stretch",
         )
-        c3.download_button(
+        st.download_button(
             "Download project JSON",
             json_bytes,
             f"{base_name}.json",
@@ -566,6 +707,6 @@ with tabs[3]:
             width="stretch",
         )
 
-st.sidebar.divider()
-st.sidebar.caption("Colour rules: 🔴 <14.0 in · 🟡 14.0–16.0 in inclusive · 🔵 >16.0 in")
-st.sidebar.caption("Always review and correct every outside-bark ring before using the measurements.")
+st.divider()
+st.caption("Colour rules: 🔴 <14.0 in · 🟡 14.0–16.0 in inclusive · 🔵 >16.0 in")
+st.caption("Always review and correct every outside-bark ring before using the measurements.")

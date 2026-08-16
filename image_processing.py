@@ -14,6 +14,24 @@ def pil_to_rgb(image: Image.Image) -> np.ndarray:
     return np.asarray(image.convert("RGB"))
 
 
+def resize_for_analysis(
+    rgb: np.ndarray, max_dimension: int = 2400
+) -> tuple[np.ndarray, float]:
+    """Downscale very large phone photos for predictable cloud processing."""
+    image = np.asarray(rgb, dtype=np.uint8)
+    height, width = image.shape[:2]
+    longest = max(height, width)
+    if longest <= max_dimension:
+        return image, 1.0
+    scale = float(max_dimension) / float(longest)
+    resized = cv2.resize(
+        image,
+        (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+        interpolation=cv2.INTER_AREA,
+    )
+    return resized, scale
+
+
 def enhance_image(
     rgb: np.ndarray,
     brightness: int = 0,
