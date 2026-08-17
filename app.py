@@ -709,8 +709,12 @@ with tabs[2]:
                 alt.Chart(count_df)
                 .mark_bar()
                 .encode(
-                    x=alt.X("Range:N", sort=["Blue >16", "Yellow 14–16", "Red <14"], title="Range"),
-                    y=alt.Y("Logs:Q", title="Logs"),
+                    x=alt.X("Logs:Q", title="Logs"),
+                    y=alt.Y(
+                        "Range:N",
+                        sort=["Blue >16", "Yellow 14–16", "Red <14"],
+                        title=None,
+                    ),
                     color=alt.Color("Colour:N", scale=colour_scale, legend=None),
                     tooltip=["Range:N", "Logs:Q"],
                 )
