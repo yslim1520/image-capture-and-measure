@@ -163,3 +163,28 @@ def measured_logs(circles: Iterable[dict], calibration: dict | None) -> list[dic
         )
         result.append(item)
     return result
+
+
+def measurement_summary(logs: Iterable[dict]) -> list[dict]:
+    """Summarize average diameter, tolerance, and count for all colour ranges."""
+    items = [dict(log) for log in logs]
+    ranges = [
+        ("All logs", None),
+        ("Blue >16", "Blue"),
+        ("Yellow 14–16", "Yellow"),
+        ("Red <14", "Red"),
+    ]
+    summary: list[dict] = []
+    for label, group in ranges:
+        selected = items if group is None else [log for log in items if log.get("group") == group]
+        diameters = [float(log["diameter_in"]) for log in selected if log.get("diameter_in") is not None]
+        tolerances = [float(log["tolerance_in"]) for log in selected if log.get("tolerance_in") is not None]
+        summary.append(
+            {
+                "Range": label,
+                "Avg dia (in)": round(sum(diameters) / len(diameters), 1) if diameters else None,
+                "Avg tol (±in)": round(sum(tolerances) / len(tolerances), 1) if tolerances else None,
+                "Logs": len(selected),
+            }
+        )
+    return summary

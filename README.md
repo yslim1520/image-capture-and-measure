@@ -22,7 +22,9 @@ The same codebase now provides a responsive Android-friendly web workflow. It pr
 - Reports diameter to one decimal place and an estimated tolerance.
 - Assigns unique IDs (`L01`, `L02`, ...).
 - Reassigns IDs on demand, row by row from upper-left to lower-right, without silently renumbering during edits.
-- Shows a labelled annotated preview in calibration/review before reference selection.
+- Shows the labelled annotated preview at the bottom of **Correct rings** for an immediate post-correction ID check.
+- Summarizes average diameter, average tolerance, and log counts for all logs and each colour range.
+- Provides selectable charts for diameter by ID, diameter distribution, and log count by colour range.
 - Colours rings: Red `<14.0 in`, Yellow `14.0–16.0 in` inclusive, Blue `>16.0 in`.
 - Exports annotated PNG/JPG, Excel-friendly CSV, and a reopenable JSON project file.
 
@@ -54,12 +56,12 @@ This creates a private repository, adds it as `origin`, and pushes `main`.
 ## Recommended measurement workflow
 
 1. Upload the original, highest-resolution photo. Keep the camera as square to the log ends as practical.
-2. Adjust visibility, then choose **Auto-detect logs**.
+2. Adjust visibility, then choose **Auto-detect log ends**.
 3. In **Correct rings**, inspect every log. The ring must follow the **outside bark**, not the pale wood or an internal mark.
 4. Delete false rings, add missing rings, and move/resize imperfect rings. Use focused regions for close work.
 5. Apply the corrections, then choose **Reassign IDs row by row** and inspect the labelled preview.
-6. In **Calibrate & review**, use the annotated ID preview to select one or two reference logs and enter actual outside-bark diameters.
-7. Review the measured preview and tolerance. A second reference helps expose scale/perspective disagreement.
+6. In **Calibrate & review**, use the IDs confirmed in the correction preview to select one or two reference logs and enter actual outside-bark diameters.
+7. Review the measured preview, result table, summary, selected graph, and tolerance. A second reference helps expose scale/perspective disagreement.
 8. Export the annotated image, CSV, and JSON project.
 
 The included OPT photograph seeds the two user-identified references near the blue marks as **19.0 in** and **13.0 in**. Confirm both rings visually before using the calibration.

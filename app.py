@@ -7,6 +7,7 @@ import json
 from io import BytesIO
 from pathlib import Path
 
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -31,6 +32,7 @@ from measurement import (
     assign_log_ids,
     calibration_from_references,
     ensure_log_ids,
+    measurement_summary,
     measured_logs,
     nearest_circle,
     ring_rgb,
@@ -405,14 +407,8 @@ with tabs[1]:
         st.session_state.canvas_revision += 1
         st.rerun()
     st.caption(
-        "Apply canvas/table corrections first. Then this numbers from the upper-left row to the lower-right row."
+        "Apply canvas/table corrections first. Then use this button to number logs from the upper-left row to the lower-right row."
     )
-    if st.session_state.get("show_reassigned_preview") and circles:
-        st.image(
-            annotated_image(enhanced, measured_logs(circles, None), "PNG"),
-            caption="Preview after row-by-row ID reassignment",
-            width="stretch",
-        )
     editor_profile = st.radio(
         "Editing screen size",
         ["Phone", "Tablet", "Desktop"],
@@ -547,15 +543,19 @@ with tabs[1]:
             st.session_state.canvas_revision += 1
             st.rerun()
 
-with tabs[2]:
-    st.markdown('<div class="step-card"><b>Calibration:</b> select one or two clearly visible reference logs, then enter their actual outside-bark diameter in inches.</div>', unsafe_allow_html=True)
     if circles:
         st.subheader("Annotated ID preview")
+        if st.session_state.get("show_reassigned_preview"):
+            st.success("IDs are reassigned row by row, from upper-left to lower-right.")
         st.image(
             annotated_image(enhanced, measured_logs(circles, None), "PNG"),
-            caption="Use these printed IDs in the reference dropdowns below.",
+            caption="Final on-the-spot check after corrections and ID reassignment.",
             width="stretch",
         )
+        st.caption("Confirm that every outside-bark ring and printed ID matches the intended log before calibration.")
+
+with tabs[2]:
+    st.markdown('<div class="step-card"><b>Calibration:</b> select one or two clearly visible reference logs, then enter their actual outside-bark diameter in inches.</div>', unsafe_allow_html=True)
     log_ids = [str(circle["id"]) for circle in circles]
     saved_references = [
         (log_id, float(actual))
@@ -655,6 +655,67 @@ with tabs[2]:
             ]
         )
         st.dataframe(result_df, hide_index=True, width="stretch")
+
+        st.subheader("Measurement summary")
+        summary_rows = measurement_summary(logs)
+        summary_df = pd.DataFrame(summary_rows)
+        st.dataframe(summary_df, hide_index=True, width="stretch")
+
+        st.subheader("Measurement graph")
+        graph_choice = st.selectbox(
+            "Graph view",
+            ["Diameter by log ID", "Diameter distribution", "Log count by colour range"],
+        )
+        colour_scale = alt.Scale(
+            domain=["Blue", "Yellow", "Red"],
+            range=["#1976FF", "#E0A800", "#EE2F2F"],
+        )
+        chart_df = pd.DataFrame(
+            [
+                {
+                    "ID": log["id"],
+                    "Diameter (in)": log["diameter_in"],
+                    "Range": log["group"],
+                }
+                for log in logs
+            ]
+        )
+        if graph_choice == "Diameter by log ID":
+            chart = (
+                alt.Chart(chart_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("ID:N", sort=None, title="Log ID", axis=alt.Axis(labelAngle=-45)),
+                    y=alt.Y("Diameter (in):Q", title="Diameter (in)"),
+                    color=alt.Color("Range:N", scale=colour_scale, title="Range"),
+                    tooltip=["ID:N", "Diameter (in):Q", "Range:N"],
+                )
+            )
+        elif graph_choice == "Diameter distribution":
+            chart = (
+                alt.Chart(chart_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Diameter (in):Q", bin=alt.Bin(maxbins=12), title="Diameter (in)"),
+                    y=alt.Y("count():Q", title="Logs"),
+                    color=alt.Color("Range:N", scale=colour_scale, title="Range"),
+                    tooltip=[alt.Tooltip("count():Q", title="Logs"), "Range:N"],
+                )
+            )
+        else:
+            count_df = summary_df.iloc[1:][["Range", "Logs"]].copy()
+            count_df["Colour"] = ["Blue", "Yellow", "Red"]
+            chart = (
+                alt.Chart(count_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Range:N", sort=["Blue >16", "Yellow 14–16", "Red <14"], title="Range"),
+                    y=alt.Y("Logs:Q", title="Logs"),
+                    color=alt.Color("Colour:N", scale=colour_scale, legend=None),
+                    tooltip=["Range:N", "Logs:Q"],
+                )
+            )
+        st.altair_chart(chart, width="stretch")
     else:
         st.info("Save at least one reference selection to calculate diameters.")
 
