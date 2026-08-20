@@ -1,11 +1,13 @@
 # MVP test report
 
-Tested on Windows on 17 August 2026 with Python 3.12.13.
+Tested on Windows and updated on 20 August 2026 with Python 3.12.13.
 
 ## Automated checks
 
-- Thirteen calculation, category-boundary, CSV, JSON, image-export, stable-ID, tap/hover-label, photo-quality, large-image resizing, roundness, and sample-detection tests pass.
+- Eighteen calculation, category-boundary, CSV, JSON, image-export, stable-ID, tap/hover-label, photo-quality, large-image resizing, roundness, guided-detection, and Streamlit workflow tests pass.
 - The Streamlit application test runner completes with no application exceptions.
+- Guided detection returns exactly one fitted ring per marked point and ignores unmarked log candidates.
+- The mobile workflow exposes the Phone/Tablet/Desktop preselection canvas and separate Move, Add, Resize, and Delete tools.
 - Streamlit 1.61.1, OpenCV 5.0.0, and the interactive drawable-canvas component import successfully.
 
 ## Android-sized browser check

@@ -23,6 +23,7 @@ from export_utils import (
 )
 from image_processing import (
     detect_log_ends,
+    detect_log_ends_at_points,
     edge_preview,
     enhance_image,
     pil_to_rgb,
@@ -110,6 +111,9 @@ def _reset_for_image(image_sha: str) -> None:
         st.session_state.references = {}
         st.session_state.canvas_revision = 0
         st.session_state.reference_widget_revision = 0
+        st.session_state.preselect_points = []
+        st.session_state.preselect_revision = 0
+        st.session_state.selected_ring_id = ""
         st.session_state.sample_refs_seeded = False
         st.session_state.show_reassigned_preview = False
 
@@ -136,7 +140,12 @@ def _sync_reference_widgets(image_sha: str, references: dict[str, float]) -> Non
         st.session_state[f"reference_2_diameter_{suffix}"] = float(items[1][1])
 
 
-def _fabric_objects(circles: list[dict], crop: tuple[int, int, int, int], scale: float) -> list[dict]:
+def _fabric_objects(
+    circles: list[dict],
+    crop: tuple[int, int, int, int],
+    scale: float,
+    allow_resize: bool = True,
+) -> list[dict]:
     x0, y0, x1, y1 = crop
     objects = []
     for circle in circles:
@@ -160,9 +169,61 @@ def _fabric_objects(circles: list[dict], crop: tuple[int, int, int, int], scale:
                 "uid": circle.get("uid", ""),
                 "source": circle.get("source", "Manual"),
                 "confidence": circle.get("confidence", 1.0),
+                "lockScalingX": not allow_resize,
+                "lockScalingY": not allow_resize,
+                "lockRotation": True,
+                "hasControls": allow_resize,
             }
         )
     return objects
+
+
+def _fabric_points(
+    points: list[tuple[float, float]],
+    crop: tuple[int, int, int, int],
+    scale: float,
+    radius: float = 5.0,
+) -> list[dict]:
+    x0, y0, x1, y1 = crop
+    objects: list[dict] = []
+    for x, y in points:
+        if not (x0 <= x <= x1 and y0 <= y <= y1):
+            continue
+        objects.append(
+            {
+                "type": "circle",
+                "left": (float(x) - x0) * scale - radius,
+                "top": (float(y) - y0) * scale - radius,
+                "radius": radius,
+                "scaleX": 1.0,
+                "scaleY": 1.0,
+                "fill": "rgba(255,87,34,0.72)",
+                "stroke": "#FFFFFF",
+                "strokeWidth": 2,
+                "selectable": False,
+                "evented": False,
+            }
+        )
+    return objects
+
+
+def _canvas_to_points(
+    json_data: dict | None,
+    crop: tuple[int, int, int, int],
+    scale: float,
+) -> list[tuple[float, float]]:
+    x0, y0, x1, y1 = crop
+    points: list[tuple[float, float]] = []
+    for obj in (json_data or {}).get("objects", []):
+        if obj.get("type") != "circle" or obj.get("log_id"):
+            continue
+        radius_x = float(obj.get("radius", 0.0)) * float(obj.get("scaleX", 1.0))
+        radius_y = float(obj.get("radius", 0.0)) * float(obj.get("scaleY", 1.0))
+        center_x = (float(obj.get("left", 0.0)) + radius_x) / scale + x0
+        center_y = (float(obj.get("top", 0.0)) + radius_y) / scale + y0
+        if x0 <= center_x <= x1 and y0 <= center_y <= y1:
+            points.append((center_x, center_y))
+    return points
 
 
 def _canvas_to_circles(
@@ -334,11 +395,93 @@ with st.expander("Optional image and detection settings"):
 
 enhanced = enhance_image(original_rgb, brightness, contrast, sharpness)
 
+preselect_mode = st.toggle(
+    "Preselect mode — tap each log centre before detection",
+    value=False,
+    help="When marks exist, detection returns one ring per mark and ignores unmarked logs.",
+)
+active_preselect_points: list[tuple[float, float]] = []
+if preselect_mode:
+    st.markdown(
+        '<div class="step-card"><b>Preselect logs:</b> tap once near the centre of every log end you want measured. '
+        "Use Undo for a mistaken tap, or Clear points to start again.</div>",
+        unsafe_allow_html=True,
+    )
+    preselect_screen = st.segmented_control(
+        "Preselect canvas size",
+        ["Phone", "Tablet", "Desktop"],
+        default="Phone",
+        key=f"preselect_screen_{image_sha[:8]}",
+    ) or "Phone"
+    preselect_target_width = {"Phone": 360, "Tablet": 720, "Desktop": 1100}[
+        preselect_screen
+    ]
+    preselect_scale = min(preselect_target_width / width, 600 / height)
+    preselect_canvas_w = max(160, int(round(width * preselect_scale)))
+    preselect_canvas_h = max(100, int(round(height * preselect_scale)))
+    preselect_background = Image.fromarray(enhanced).resize(
+        (preselect_canvas_w, preselect_canvas_h)
+    )
+    preselect_initial = {
+        "version": "4.4.0",
+        "objects": _fabric_points(
+            list(st.session_state.preselect_points),
+            (0, 0, width, height),
+            preselect_scale,
+            6.0,
+        ),
+    }
+    preselect_canvas = st_canvas(
+        fill_color="rgba(255,87,34,0.72)",
+        stroke_width=2,
+        stroke_color="#FFFFFF",
+        background_image=preselect_background,
+        update_streamlit=True,
+        height=preselect_canvas_h,
+        width=preselect_canvas_w,
+        drawing_mode="point",
+        point_display_radius=6,
+        initial_drawing=preselect_initial,
+        display_toolbar=True,
+        key=(
+            f"preselect_{image_sha[:8]}_{preselect_screen}_"
+            f"{st.session_state.preselect_revision}"
+        ),
+    )
+    if preselect_canvas.json_data is not None:
+        st.session_state.preselect_points = _canvas_to_points(
+            preselect_canvas.json_data,
+            (0, 0, width, height),
+            preselect_scale,
+        )
+    active_preselect_points = list(st.session_state.preselect_points)
+    st.metric("Marked logs", len(active_preselect_points))
+    if st.button("Clear preselection points", width="stretch"):
+        st.session_state.preselect_points = []
+        st.session_state.preselect_revision += 1
+        st.rerun()
+    if active_preselect_points:
+        st.success(
+            f"Guided detection will create exactly {len(active_preselect_points)} ring(s)."
+        )
+    else:
+        st.info("No points are marked, so Auto-detect will use normal full-image detection.")
+
 if st.button("Auto-detect log ends", type="primary", width="stretch"):
     with st.spinner("Fitting rings to visible outside-bark boundaries…"):
         try:
-            st.session_state.circles = assign_log_ids(
-                detect_log_ends(
+            detected = (
+                detect_log_ends_at_points(
+                    enhanced,
+                    active_preselect_points,
+                    min_radius,
+                    max_radius,
+                    hough_threshold,
+                    search_y,
+                    minimum_roundness,
+                )
+                if active_preselect_points
+                else detect_log_ends(
                     enhanced,
                     min_radius,
                     max_radius,
@@ -346,6 +489,9 @@ if st.button("Auto-detect log ends", type="primary", width="stretch"):
                     search_y,
                     minimum_roundness,
                 )
+            )
+            st.session_state.circles = assign_log_ids(
+                detected
             )
             st.session_state.references = {}
             _clear_reference_widgets(image_sha)
@@ -395,7 +541,7 @@ with tabs[0]:
         st.write("Continue to **Correct rings** to add, delete, move, or resize every result.")
 
 with tabs[1]:
-    st.markdown('<div class="step-card"><b>How to edit:</b> choose a focused region. On a phone, tap a ring to select it, drag its centre to move it, and drag a corner handle to resize it. Use the trash icon to delete it, or switch to Add circle for a missing log.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="step-card"><b>How to edit:</b> choose a focused region and then use one separate tool. Add creates a circle at your tap. Move lets you tap and drag. Resize and Delete let you tap a ring first, then use a dedicated slider or button.</div>', unsafe_allow_html=True)
     if st.button("Reassign IDs row by row", type="secondary", width="stretch"):
         reassigned = assign_log_ids(circles)
         st.session_state.references = _remap_references_after_reassignment(
@@ -431,7 +577,12 @@ with tabs[1]:
     x_range = st.slider("Pan horizontally (pixels)", 0, width, default_x, key=f"xrange_{image_sha[:8]}_{preset}")
     y_range = st.slider("Focus vertically (pixels)", 0, height, (0, height), key=f"yrange_{image_sha[:8]}")
     zoom = st.slider("Canvas zoom", 0.7, 2.0, 1.0, 0.1)
-    edit_mode = st.radio("Editing tool", ["Move / resize / delete", "Add circle"], horizontal=True)
+    correction_tool = st.segmented_control(
+        "Correction tool",
+        ["Move", "Add", "Resize", "Delete"],
+        default="Move",
+        key=f"correction_tool_{image_sha[:8]}",
+    ) or "Move"
     x0, x1 = x_range
     y0, y1 = y_range
     if x1 - x0 < 20 or y1 - y0 < 20:
@@ -446,11 +597,6 @@ with tabs[1]:
         scale = max(0.15, base_scale * zoom)
         canvas_w = max(100, int((x1 - x0) * scale))
         canvas_h = max(100, int((y1 - y0) * scale))
-        st.markdown(
-            f'<style>iframe[title="streamlit_drawable_canvas.st_canvas"] '
-            f'{{height:{canvas_h + 12}px !important;min-height:{canvas_h + 12}px !important;}}</style>',
-            unsafe_allow_html=True,
-        )
         crop_image = Image.fromarray(enhanced[y0:y1, x0:x1]).resize((canvas_w, canvas_h))
         hover_circles = []
         for circle in circles:
@@ -469,38 +615,222 @@ with tabs[1]:
                 hover_id_overlay(np.asarray(crop_image), hover_circles),
                 unsafe_allow_javascript=True,
             )
-            st.caption("Correction canvas")
-        initial = {
-            "version": "4.4.0",
-            "objects": _fabric_objects(circles, (x0, y0, x1, y1), scale),
-        }
-        canvas_result = st_canvas(
-            fill_color="rgba(0,0,0,0.01)",
-            stroke_width=3,
-            stroke_color="#00E5FF",
-            background_image=crop_image,
-            update_streamlit=True,
-            height=canvas_h,
-            width=canvas_w,
-            drawing_mode="transform" if edit_mode.startswith("Move") else "circle",
-            initial_drawing=initial,
-            display_toolbar=True,
-            key=f"canvas_{image_sha[:8]}_{preset}_{st.session_state.canvas_revision}_{edit_mode}",
+            st.caption("ID map")
+
+        annotated_full = np.asarray(
+            Image.open(
+                BytesIO(annotated_image(enhanced, measured_logs(circles, None), "PNG"))
+            ).convert("RGB")
         )
-        if st.button("✓ Apply canvas corrections", type="primary"):
-            updated_circles = _canvas_to_circles(
-                canvas_result.json_data, (x0, y0, x1, y1), scale, circles
+        annotated_crop = Image.fromarray(annotated_full[y0:y1, x0:x1]).resize(
+            (canvas_w, canvas_h)
+        )
+
+        if correction_tool == "Move":
+            st.caption("Move: tap or long-press a ring, then drag it to the correct centre.")
+            if not circles:
+                st.info("There are no rings to move. Use Add first.")
+            else:
+                move_initial = {
+                    "version": "4.4.0",
+                    "objects": _fabric_objects(
+                        circles,
+                        (x0, y0, x1, y1),
+                        scale,
+                        allow_resize=False,
+                    ),
+                }
+                move_canvas = st_canvas(
+                    fill_color="rgba(0,0,0,0.01)",
+                    stroke_width=3,
+                    stroke_color="#00E5FF",
+                    background_image=crop_image,
+                    update_streamlit=True,
+                    height=canvas_h,
+                    width=canvas_w,
+                    drawing_mode="transform",
+                    initial_drawing=move_initial,
+                    display_toolbar=False,
+                    key=(
+                        f"move_canvas_{image_sha[:8]}_{preset}_"
+                        f"{st.session_state.canvas_revision}"
+                    ),
+                )
+                if st.button("Apply moved rings", type="primary", width="stretch"):
+                    updated_circles = _canvas_to_circles(
+                        move_canvas.json_data,
+                        (x0, y0, x1, y1),
+                        scale,
+                        circles,
+                    )
+                    valid_ids = {circle["id"] for circle in updated_circles}
+                    st.session_state.circles = updated_circles
+                    st.session_state.references = {
+                        log_id: actual
+                        for log_id, actual in st.session_state.references.items()
+                        if log_id in valid_ids
+                    }
+                    st.session_state.show_reassigned_preview = False
+                    st.session_state.canvas_revision += 1
+                    st.rerun()
+
+        elif correction_tool == "Add":
+            suggested_diameter = int(
+                round(np.median([float(circle["radius"]) * 2.0 for circle in circles]))
+            ) if circles else int(round(min_radius + max_radius))
+            add_diameter = st.slider(
+                "New circle diameter (px)",
+                10,
+                max(20, min(width // 2, max_radius * 4)),
+                int(np.clip(suggested_diameter, 10, max(20, min(width // 2, max_radius * 4)))),
+                1,
+                help="Every tap in this Add session uses this locked round size.",
             )
-            valid_ids = {circle["id"] for circle in updated_circles}
-            st.session_state.circles = updated_circles
-            st.session_state.references = {
-                log_id: actual
-                for log_id, actual in st.session_state.references.items()
-                if log_id in valid_ids
-            }
-            st.session_state.show_reassigned_preview = False
-            st.session_state.canvas_revision += 1
-            st.rerun()
+            st.caption("Add: tap the centre of each missing log. Each tap creates one round circle.")
+            add_canvas = st_canvas(
+                fill_color="rgba(0,229,255,0.14)",
+                stroke_width=3,
+                stroke_color="#00E5FF",
+                background_image=annotated_crop,
+                update_streamlit=True,
+                height=canvas_h,
+                width=canvas_w,
+                drawing_mode="point",
+                point_display_radius=max(4, int(round(add_diameter * scale / 2.0))),
+                initial_drawing={"version": "4.4.0", "objects": []},
+                display_toolbar=True,
+                key=(
+                    f"add_canvas_{image_sha[:8]}_{preset}_"
+                    f"{st.session_state.canvas_revision}_{add_diameter}"
+                ),
+            )
+            add_points = _canvas_to_points(
+                add_canvas.json_data,
+                (x0, y0, x1, y1),
+                scale,
+            )
+            st.caption(f"New circles ready: {len(add_points)}")
+            if st.button(
+                "Apply added circles",
+                type="primary",
+                width="stretch",
+                disabled=not add_points,
+            ):
+                additions = [
+                    {
+                        "x": point_x,
+                        "y": point_y,
+                        "radius": float(add_diameter) / 2.0,
+                        "source": "Manual tap add",
+                        "confidence": 1.0,
+                    }
+                    for point_x, point_y in add_points
+                ]
+                st.session_state.circles = ensure_log_ids(circles + additions)
+                st.session_state.show_reassigned_preview = False
+                st.session_state.canvas_revision += 1
+                st.rerun()
+
+        else:
+            action_word = "resize" if correction_tool == "Resize" else "delete"
+            st.caption(
+                f"{correction_tool}: tap the target ring in the labelled image, then {action_word} the selected ID below."
+            )
+            selection_canvas = st_canvas(
+                fill_color="rgba(255,87,34,0.78)",
+                stroke_width=2,
+                stroke_color="#FFFFFF",
+                background_image=annotated_crop,
+                update_streamlit=True,
+                height=canvas_h,
+                width=canvas_w,
+                drawing_mode="point",
+                point_display_radius=6,
+                initial_drawing={"version": "4.4.0", "objects": []},
+                display_toolbar=True,
+                key=(
+                    f"select_canvas_{correction_tool}_{image_sha[:8]}_{preset}_"
+                    f"{st.session_state.canvas_revision}"
+                ),
+            )
+            selection_points = _canvas_to_points(
+                selection_canvas.json_data,
+                (x0, y0, x1, y1),
+                scale,
+            )
+            visible_circles = [
+                circle
+                for circle in circles
+                if x0 <= float(circle["x"]) <= x1 and y0 <= float(circle["y"]) <= y1
+            ]
+            if selection_points and visible_circles:
+                selected_circle = nearest_circle(
+                    visible_circles,
+                    selection_points[-1][0],
+                    selection_points[-1][1],
+                )
+                st.session_state.selected_ring_id = selected_circle["id"] if selected_circle else ""
+            selected_circle = next(
+                (
+                    circle
+                    for circle in circles
+                    if circle["id"] == st.session_state.get("selected_ring_id")
+                ),
+                None,
+            )
+            if selected_circle is None:
+                st.info("Tap a ring to select it.")
+            else:
+                st.success(
+                    f"Selected {selected_circle['id']} · diameter {float(selected_circle['radius']) * 2.0:.1f} px"
+                )
+                if correction_tool == "Resize":
+                    diameter_limit = max(20, min(width // 2, max_radius * 4))
+                    selected_diameter = st.slider(
+                        "Selected circle diameter (px)",
+                        10,
+                        diameter_limit,
+                        int(
+                            np.clip(
+                                round(float(selected_circle["radius"]) * 2.0),
+                                10,
+                                diameter_limit,
+                            )
+                        ),
+                        1,
+                        key=(
+                            f"resize_{image_sha[:8]}_{selected_circle['id']}_"
+                            f"{st.session_state.canvas_revision}"
+                        ),
+                    )
+                    st.caption("The aspect ratio is locked, so the ring stays perfectly round.")
+                    if st.button("Apply circle size", type="primary", width="stretch"):
+                        st.session_state.circles = [
+                            {
+                                **circle,
+                                "radius": float(selected_diameter) / 2.0,
+                                "source": "Manual slider resize",
+                            }
+                            if circle["id"] == selected_circle["id"]
+                            else circle
+                            for circle in circles
+                        ]
+                        st.session_state.show_reassigned_preview = False
+                        st.session_state.canvas_revision += 1
+                        st.rerun()
+                else:
+                    st.warning(f"Delete {selected_circle['id']}? This removes only the selected ring.")
+                    if st.button("Delete selected ring", type="primary", width="stretch"):
+                        st.session_state.circles = [
+                            circle
+                            for circle in circles
+                            if circle["id"] != selected_circle["id"]
+                        ]
+                        st.session_state.references.pop(selected_circle["id"], None)
+                        st.session_state.selected_ring_id = ""
+                        st.session_state.show_reassigned_preview = False
+                        st.session_state.canvas_revision += 1
+                        st.rerun()
 
     with st.expander("Precise table corrections"):
         table = pd.DataFrame(

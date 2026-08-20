@@ -13,7 +13,10 @@ The same codebase now provides a responsive Android-friendly web workflow. It pr
 - Proposes log-end rings with OpenCV Hough circles and a contour/ellipse fallback.
 - Filters proposals by full-circumference edge support so straight and partial shapes are less likely to be accepted.
 - Refines proposed radii toward visible outside-bark boundaries.
-- Adds, deletes, moves, and resizes rings on an interactive canvas.
+- Offers optional **Preselect mode**: tap each wanted log centre, then create exactly one fitted ring per mark. With no marks, normal full-image detection is used.
+- Separates mobile correction into **Move**, **Add**, **Resize**, and **Delete** tools.
+- Adds a fixed-size round circle at each mouse or finger tap.
+- Moves rings by tap/long-press and drag, resizes the selected ring with a locked-round slider, and deletes only through a dedicated confirmation button.
 - Shows each ring ID only while hovering in the correction ID map.
 - On touchscreens, shows the ID when a ring is tapped.
 - Supports full-image and left/centre/right focused editing, horizontal/vertical panning, and canvas zoom.
@@ -56,13 +59,14 @@ This creates a private repository, adds it as `origin`, and pushes `main`.
 ## Recommended measurement workflow
 
 1. Upload the original, highest-resolution photo. Keep the camera as square to the log ends as practical.
-2. Adjust visibility, then choose **Auto-detect log ends**.
-3. In **Correct rings**, inspect every log. The ring must follow the **outside bark**, not the pale wood or an internal mark.
-4. Delete false rings, add missing rings, and move/resize imperfect rings. Use focused regions for close work.
-5. Apply the corrections, then choose **Reassign IDs row by row** and inspect the labelled preview.
-6. In **Calibrate & review**, use the IDs confirmed in the correction preview to select one or two reference logs and enter actual outside-bark diameters.
-7. Review the measured preview, result table, summary, selected graph, and tolerance. A second reference helps expose scale/perspective disagreement.
-8. Export the annotated image, CSV, and JSON project.
+2. Optionally enable **Preselect mode** and tap the centre of every log you want measured. If you leave it empty, normal full-image detection is used.
+3. Choose **Auto-detect log ends**. With preselection marks, the app returns one ring per mark and ignores unmarked logs.
+4. In **Correct rings**, inspect every log. The ring must follow the **outside bark**, not the pale wood or an internal mark.
+5. Use the separate Move, Add, Resize, and Delete tools. Use focused regions for close work.
+6. Apply the corrections, then choose **Reassign IDs row by row** and inspect the labelled preview.
+7. In **Calibrate & review**, use the IDs confirmed in the correction preview to select one or two reference logs and enter actual outside-bark diameters.
+8. Review the measured preview, result table, summary, selected graph, and tolerance. A second reference helps expose scale/perspective disagreement.
+9. Export the annotated image, CSV, and JSON project.
 
 The included OPT photograph seeds the two user-identified references near the blue marks as **19.0 in** and **13.0 in**. Confirm both rings visually before using the calibration.
 

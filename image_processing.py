@@ -309,3 +309,155 @@ def detect_log_ends(
         )
         round_candidates.append(circle)
     return _deduplicate(round_candidates, min_radius)
+
+
+def _guided_circle_at_point(
+    rgb: np.ndarray,
+    point: tuple[float, float],
+    min_radius: int,
+    max_radius: int,
+    hough_threshold: int,
+    minimum_roundness: float,
+) -> dict:
+    """Fit one best-effort circular boundary around a user-marked log centre."""
+    height, width = rgb.shape[:2]
+    point_x = float(np.clip(point[0], 0, width - 1))
+    point_y = float(np.clip(point[1], 0, height - 1))
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    magnitude = _gradient_magnitude(gray)
+    half_size = max(int(max_radius * 1.8), int(min_radius * 3.0))
+    left = max(0, int(round(point_x)) - half_size)
+    right = min(width, int(round(point_x)) + half_size + 1)
+    top = max(0, int(round(point_y)) - half_size)
+    bottom = min(height, int(round(point_y)) + half_size + 1)
+    roi = gray[top:bottom, left:right]
+    candidates: list[dict] = []
+    if roi.size:
+        clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
+        blurred = cv2.GaussianBlur(clahe.apply(roi), (7, 7), 1.6)
+        hough = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1.1,
+            minDist=max(10, int(min_radius * 1.2)),
+            param1=105,
+            param2=max(14, int(hough_threshold * 0.72)),
+            minRadius=int(min_radius),
+            maxRadius=int(max_radius),
+        )
+        if hough is not None:
+            for local_x, local_y, radius in hough[0]:
+                x = float(local_x + left)
+                y = float(local_y + top)
+                distance = hypot(x - point_x, y - point_y)
+                if distance > max(float(radius) * 1.1, float(min_radius) * 1.4):
+                    continue
+                refined_radius, boundary_confidence = _radial_refine(
+                    gray, x, y, float(radius), magnitude
+                )
+                refined_radius = float(np.clip(refined_radius, min_radius, max_radius))
+                roundness = _boundary_roundness(magnitude, x, y, refined_radius)
+                proximity = max(0.0, 1.0 - distance / max(refined_radius * 1.1, 1.0))
+                candidates.append(
+                    {
+                        "x": x,
+                        "y": y,
+                        "radius": refined_radius,
+                        "source": "Guided local Hough",
+                        "roundness": round(roundness, 3),
+                        "confidence": round(
+                            0.45 * roundness + 0.30 * boundary_confidence + 0.25 * proximity,
+                            3,
+                        ),
+                    }
+                )
+
+    acceptable = [
+        circle
+        for circle in candidates
+        if float(circle.get("roundness", 0.0)) >= max(0.35, minimum_roundness - 0.25)
+    ]
+    if acceptable:
+        return max(acceptable, key=lambda circle: float(circle.get("confidence", 0.0)))
+
+    max_inside_radius = max(
+        5.0,
+        min(point_x, point_y, width - 1 - point_x, height - 1 - point_y) - 1.0,
+    )
+    radius_ceiling = max(5.0, min(float(max_radius), max_inside_radius))
+    radius_floor = min(float(min_radius), radius_ceiling)
+    tested_radii = np.linspace(radius_floor, radius_ceiling, 30)
+    scored = [
+        (_boundary_roundness(magnitude, point_x, point_y, float(radius)), float(radius))
+        for radius in tested_radii
+    ]
+    roundness, radius = max(scored, key=lambda item: item[0])
+    radius, boundary_confidence = _radial_refine(gray, point_x, point_y, radius, magnitude)
+    return {
+        "x": point_x,
+        "y": point_y,
+        "radius": float(np.clip(radius, radius_floor, radius_ceiling)),
+        "source": "Guided point fallback",
+        "roundness": round(float(roundness), 3),
+        "confidence": round(0.35 * float(roundness) + 0.25 * boundary_confidence, 3),
+    }
+
+
+def detect_log_ends_at_points(
+    rgb: np.ndarray,
+    points: Iterable[tuple[float, float]],
+    min_radius: int,
+    max_radius: int,
+    hough_threshold: int = 30,
+    search_y_percent: tuple[int, int] = (0, 100),
+    minimum_roundness: float = 0.70,
+) -> list[dict]:
+    """Return exactly one fitted ring per marked point, or normal detection when empty."""
+    marked_points = [(float(x), float(y)) for x, y in points]
+    if not marked_points:
+        return detect_log_ends(
+            rgb,
+            min_radius,
+            max_radius,
+            hough_threshold,
+            search_y_percent,
+            minimum_roundness,
+        )
+
+    automatic = detect_log_ends(
+        rgb,
+        min_radius,
+        max_radius,
+        hough_threshold,
+        search_y_percent,
+        minimum_roundness,
+    )
+    unused = set(range(len(automatic)))
+    guided: list[dict] = []
+    for point in marked_points:
+        eligible: list[tuple[float, int]] = []
+        for index in unused:
+            candidate = automatic[index]
+            distance = hypot(float(candidate["x"]) - point[0], float(candidate["y"]) - point[1])
+            if distance <= max(float(candidate["radius"]) * 1.25, float(min_radius) * 1.5):
+                score = distance / max(float(candidate["radius"]), 1.0) - 0.2 * float(
+                    candidate.get("confidence", 0.0)
+                )
+                eligible.append((score, index))
+        if eligible:
+            _, best_index = min(eligible)
+            unused.remove(best_index)
+            circle = dict(automatic[best_index])
+            circle["source"] = f"Guided match · {circle.get('source', 'automatic')}"
+        else:
+            circle = _guided_circle_at_point(
+                rgb,
+                point,
+                min_radius,
+                max_radius,
+                hough_threshold,
+                minimum_roundness,
+            )
+        circle["guide_x"], circle["guide_y"] = point
+        guided.append(circle)
+    return guided

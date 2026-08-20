@@ -8,6 +8,7 @@ from image_processing import (
     _boundary_roundness,
     _gradient_magnitude,
     detect_log_ends,
+    detect_log_ends_at_points,
     pil_to_rgb,
     resize_for_analysis,
 )
@@ -42,3 +43,16 @@ def test_large_phone_photo_is_downscaled_for_analysis():
     resized, scale = resize_for_analysis(image, max_dimension=2400)
     assert resized.shape == (1800, 2400, 3)
     assert scale == 0.6
+
+
+def test_guided_detection_returns_only_one_ring_per_marked_point():
+    image_path = Path(__file__).parents[1] / "sample_data" / "opt_logs_reference.png"
+    rgb = pil_to_rgb(Image.open(image_path))
+    points = [(947, 395), (911, 483)]
+
+    circles = detect_log_ends_at_points(rgb, points, 25, 70, 38, (18, 70))
+
+    assert len(circles) == len(points)
+    for point, circle in zip(points, circles):
+        assert ((circle["x"] - point[0]) ** 2 + (circle["y"] - point[1]) ** 2) ** 0.5 < 65
+        assert circle["source"].startswith("Guided")
