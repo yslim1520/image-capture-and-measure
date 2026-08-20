@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from math import hypot, sqrt
+import re
 from statistics import median
 from typing import Iterable
+from uuid import uuid4
 
 
 RED_LIMIT_IN = 14.0
@@ -31,9 +33,37 @@ def ring_rgb(group: str) -> tuple[int, int, int]:
     }.get(group, (0, 229, 255))
 
 
-def assign_log_ids(circles: Iterable[dict]) -> list[dict]:
-    """Assign stable-looking L01... IDs by clustering circles into visual rows."""
+def ensure_log_ids(circles: Iterable[dict]) -> list[dict]:
+    """Keep existing IDs stable and assign IDs only to new/duplicate circles."""
     items = [dict(circle) for circle in circles]
+    if not items:
+        return []
+
+    used: set[str] = set()
+    needs_id: list[dict] = []
+    for circle in items:
+        circle["uid"] = str(circle.get("uid") or uuid4().hex)
+        log_id = str(circle.get("id", ""))
+        if re.fullmatch(r"L\d+", log_id) and log_id not in used:
+            used.add(log_id)
+        else:
+            circle.pop("id", None)
+            needs_id.append(circle)
+
+    next_number = 1
+    width = max(2, len(str(len(items))))
+    for circle in needs_id:
+        while f"L{next_number:0{width}d}" in used:
+            next_number += 1
+        circle["id"] = f"L{next_number:0{width}d}"
+        used.add(circle["id"])
+        next_number += 1
+    return items
+
+
+def assign_log_ids(circles: Iterable[dict]) -> list[dict]:
+    """Reassign L01... IDs row by row, from upper-left to bottom-right."""
+    items = ensure_log_ids(circles)
     if not items:
         return []
 
@@ -119,7 +149,7 @@ def measured_logs(circles: Iterable[dict], calibration: dict | None) -> list[dic
     pixels_per_inch = calibration.get("pixels_per_inch") if calibration else None
     tolerance = calibration.get("estimated_tolerance_in") if calibration else None
     result: list[dict] = []
-    for circle in assign_log_ids(circles):
+    for circle in ensure_log_ids(circles):
         item = dict(circle)
         diameter_px = float(item["radius"]) * 2.0
         diameter_in = round(diameter_px / pixels_per_inch, 1) if pixels_per_inch else None
@@ -134,3 +164,27 @@ def measured_logs(circles: Iterable[dict], calibration: dict | None) -> list[dic
         result.append(item)
     return result
 
+
+def measurement_summary(logs: Iterable[dict]) -> list[dict]:
+    """Summarize average diameter, tolerance, and count for all colour ranges."""
+    items = [dict(log) for log in logs]
+    ranges = [
+        ("All logs", None),
+        ("Blue >16", "Blue"),
+        ("Yellow 14–16", "Yellow"),
+        ("Red <14", "Red"),
+    ]
+    summary: list[dict] = []
+    for label, group in ranges:
+        selected = items if group is None else [log for log in items if log.get("group") == group]
+        diameters = [float(log["diameter_in"]) for log in selected if log.get("diameter_in") is not None]
+        tolerances = [float(log["tolerance_in"]) for log in selected if log.get("tolerance_in") is not None]
+        summary.append(
+            {
+                "Range": label,
+                "Avg dia (in)": round(sum(diameters) / len(diameters), 1) if diameters else None,
+                "Avg tol (±in)": round(sum(tolerances) / len(tolerances), 1) if tolerances else None,
+                "Logs": len(selected),
+            }
+        )
+    return summary

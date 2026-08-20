@@ -2,17 +2,32 @@
 
 A Windows-friendly local app for detecting and measuring **outside-bark** log-end diameters from JPG/PNG photographs. Auto-detection is followed by a required visual correction workflow; the app is not a substitute for a calibrated field measurement.
 
+The same codebase now provides a responsive Android-friendly web workflow. It prioritizes selecting an existing photo from Gallery or Files and can be hosted on Streamlit Community Cloud.
+
 ## What the MVP does
 
 - Uploads JPG, JPEG, and PNG images.
+- Provides photo preparation guidance and automatic resolution, lighting, sharpness, and orientation checks.
+- Creates a bounded working copy of very large phone photos for more predictable cloud processing.
 - Adjusts brightness, contrast, and sharpness; optionally previews edges.
 - Proposes log-end rings with OpenCV Hough circles and a contour/ellipse fallback.
+- Filters proposals by full-circumference edge support so straight and partial shapes are less likely to be accepted.
 - Refines proposed radii toward visible outside-bark boundaries.
-- Adds, deletes, moves, and resizes rings on an interactive canvas.
+- Offers optional **Preselect mode**: tap each wanted log centre, then create exactly one fitted ring per mark. With no marks, normal full-image detection is used.
+- Separates mobile correction into **Move**, **Add**, **Resize**, and **Delete** tools.
+- Adds a fixed-size round circle at each mouse or finger tap.
+- Moves rings by tap/long-press and drag, resizes the selected ring with a locked-round slider, and deletes only through a dedicated confirmation button.
+- Shows each ring ID only while hovering in the correction ID map.
+- On touchscreens, shows the ID when a ring is tapped.
 - Supports full-image and left/centre/right focused editing, horizontal/vertical panning, and canvas zoom.
 - Calibrates from one or two reference logs in inches.
+- Provides phone-friendly reference ID dropdowns and outside-bark diameter fields.
 - Reports diameter to one decimal place and an estimated tolerance.
 - Assigns unique IDs (`L01`, `L02`, ...).
+- Reassigns IDs on demand, row by row from upper-left to lower-right, without silently renumbering during edits.
+- Shows the labelled annotated preview at the bottom of **Correct rings** for an immediate post-correction ID check.
+- Summarizes average diameter, average tolerance, and log counts for all logs and each colour range.
+- Provides selectable charts for diameter by ID, diameter distribution, and log count by colour range.
 - Colours rings: Red `<14.0 in`, Yellow `14.0–16.0 in` inclusive, Blue `>16.0 in`.
 - Exports annotated PNG/JPG, Excel-friendly CSV, and a reopenable JSON project file.
 
@@ -24,6 +39,10 @@ A Windows-friendly local app for detecting and measuring **outside-bark** log-en
 4. A browser window opens at `http://localhost:8501`.
 
 The app runs locally. Uploaded photos are not sent anywhere by the application.
+
+## Android and cloud use
+
+Deploy the repository as a Streamlit web app, open the resulting link in Android Chrome, and add it to the home screen. See [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md) for the deployment, Android, photo-quality, and privacy instructions.
 
 ## Publish the prepared local repository to GitHub
 
@@ -40,12 +59,14 @@ This creates a private repository, adds it as `origin`, and pushes `main`.
 ## Recommended measurement workflow
 
 1. Upload the original, highest-resolution photo. Keep the camera as square to the log ends as practical.
-2. Adjust visibility, then choose **Auto-detect logs**.
-3. In **Correct rings**, inspect every log. The ring must follow the **outside bark**, not the pale wood or an internal mark.
-4. Delete false rings, add missing rings, and move/resize imperfect rings. Use focused regions for close work.
-5. In **Calibrate & review**, select one or two reference logs and enter actual outside-bark diameters.
-6. Review the annotated preview and tolerance. A second reference helps expose scale/perspective disagreement.
-7. Export the annotated image, CSV, and JSON project.
+2. Optionally enable **Preselect mode** and tap the centre of every log you want measured. If you leave it empty, normal full-image detection is used.
+3. Choose **Auto-detect log ends**. With preselection marks, the app returns one ring per mark and ignores unmarked logs.
+4. In **Correct rings**, inspect every log. The ring must follow the **outside bark**, not the pale wood or an internal mark.
+5. Use the separate Move, Add, Resize, and Delete tools. Use focused regions for close work.
+6. Apply the corrections, then choose **Reassign IDs row by row** and inspect the labelled preview.
+7. In **Calibrate & review**, use the IDs confirmed in the correction preview to select one or two reference logs and enter actual outside-bark diameters.
+8. Review the measured preview, result table, summary, selected graph, and tolerance. A second reference helps expose scale/perspective disagreement.
+9. Export the annotated image, CSV, and JSON project.
 
 The included OPT photograph seeds the two user-identified references near the blue marks as **19.0 in** and **13.0 in**. Confirm both rings visually before using the calibration.
 
@@ -63,6 +84,7 @@ py -3 -m venv .venv
 - `app.py` — Streamlit workflow and interactive correction canvas.
 - `image_processing.py` — enhancement, Hough detection, ellipse fallback, boundary refinement.
 - `measurement.py` — IDs, calibration, categories, and tolerance.
+- `photo_quality.py` — resolution, brightness, sharpness, and orientation guidance.
 - `export_utils.py` — annotated image, CSV, and JSON exports.
 - `sample_data/` — supplied OPT calibration photograph.
 - `tests/` — calculation, export, and sample-image checks.

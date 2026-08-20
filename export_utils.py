@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import csv
+import html
 import io
 import json
 from datetime import datetime, timezone
@@ -12,6 +14,71 @@ import cv2
 import numpy as np
 
 from measurement import ring_rgb
+
+
+def hover_id_overlay(rgb: np.ndarray, circles: list[dict]) -> str:
+    """Build a labelled-on-hover SVG overlay without changing the source image."""
+    image = cv2.cvtColor(np.asarray(rgb, dtype=np.uint8), cv2.COLOR_RGB2BGR)
+    ok, encoded = cv2.imencode(".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+    if not ok:
+        raise RuntimeError("OpenCV could not encode the hover preview image.")
+    image_data = base64.b64encode(encoded.tobytes()).decode("ascii")
+    height, width = image.shape[:2]
+    ring_width = max(2, int(round(width / 700)))
+    rings: list[str] = []
+    for circle in circles:
+        log_id = html.escape(str(circle.get("id", "Unnumbered")), quote=True)
+        colour = "#%02x%02x%02x" % ring_rgb(circle.get("group", "Uncalibrated"))
+        radius = max(2.0, float(circle["radius"]))
+        diameter = radius * 2.0
+        rings.append(
+            f'<div class="log-ring" style="left:{float(circle["x"]) - radius:.2f}px;'
+            f'top:{float(circle["y"]) - radius:.2f}px;width:{diameter:.2f}px;height:{diameter:.2f}px;'
+            f'border:{ring_width}px solid {colour}" data-log-id="{log_id}" '
+            f'aria-label="{log_id}" title="{log_id}"></div>'
+        )
+    return f"""<div class="opt-hover-map">
+<style>
+.opt-hover-map{{position:relative;max-width:100%;max-height:780px;overflow:auto;background:#111}}
+.opt-hover-stage{{position:relative;width:{width}px;height:{height}px}}
+.opt-hover-stage img{{position:absolute;inset:0;width:{width}px;height:{height}px;max-width:none}}
+.opt-hover-map .log-ring{{position:absolute;box-sizing:border-box;border-radius:50%;cursor:help;
+pointer-events:all;background:rgba(0,0,0,0.001)}}
+.opt-hover-map .log-tip{{display:none;position:absolute;z-index:10;padding:5px 9px;border-radius:6px;
+background:#111;color:#fff;font:600 14px system-ui,sans-serif;box-shadow:0 2px 8px #0008;
+pointer-events:none}}
+</style>
+<div class="opt-hover-stage" role="img">
+<img src="data:image/png;base64,{image_data}" width="{width}" height="{height}" alt="Log ID map">
+{''.join(rings)}
+<div class="log-tip"></div>
+</div>
+<script>
+const root=document.currentScript.parentElement;
+const tip=root.querySelector('.log-tip');
+root.querySelectorAll('.log-ring').forEach((ring)=>{{
+  ring.addEventListener('mouseenter',(event)=>{{
+    const box=root.getBoundingClientRect();
+    tip.textContent=ring.dataset.logId; tip.style.display='block';
+    tip.style.left=(event.clientX-box.left+root.scrollLeft+12)+'px';
+    tip.style.top=(event.clientY-box.top+root.scrollTop+12)+'px';
+  }});
+  ring.addEventListener('mousemove',(event)=>{{
+    const box=root.getBoundingClientRect();
+    tip.style.left=(event.clientX-box.left+root.scrollLeft+12)+'px';
+    tip.style.top=(event.clientY-box.top+root.scrollTop+12)+'px';
+  }});
+  ring.addEventListener('mouseleave',()=>{{tip.style.display='none';}});
+  ring.addEventListener('click',(event)=>{{
+    event.stopPropagation();
+    const box=root.getBoundingClientRect();
+    tip.textContent=ring.dataset.logId; tip.style.display='block';
+    tip.style.left=(event.clientX-box.left+root.scrollLeft+12)+'px';
+    tip.style.top=(event.clientY-box.top+root.scrollTop+12)+'px';
+  }});
+}});
+root.addEventListener('click',()=>{{tip.style.display='none';}});
+</script></div>"""
 
 
 def measurements_csv(logs: list[dict], references: dict[str, float]) -> bytes:
@@ -115,4 +182,3 @@ def annotated_image(rgb: np.ndarray, logs: list[dict], image_format: str = "PNG"
     if not ok:
         raise RuntimeError("OpenCV could not encode the annotated image.")
     return encoded.tobytes()
-
